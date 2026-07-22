@@ -167,13 +167,51 @@ function addResultRow(container, filename, blob) {
   container.appendChild(row);
 }
 
-// 기존 "파일 선택" 버튼(클릭 -> 탐색창)과 병행해서, 파일을 영역에 끌어다 놓는
-// 방식도 지원한다. 드롭된 파일을 input.files에 그대로 반영해 handleGenerate가
-// 두 방식 모두 동일하게 동작하도록 한다.
+function formatFileSize(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+// 드롭존 안내 문구를, 선택된 파일이 있으면 파일명/크기 + 제거 버튼으로 바꿔
+// 보여준다("파일 선택"으로 골랐든 드래그&드롭으로 놓았든 동일하게 반영).
+function renderSelectedFile(file) {
+  const emptyEl = document.getElementById("dropzoneEmpty");
+  const fileEl = document.getElementById("dropzoneFile");
+  if (!emptyEl || !fileEl) return;
+  if (!file) {
+    emptyEl.hidden = false;
+    fileEl.hidden = true;
+    return;
+  }
+  document.getElementById("fileNameText").textContent = file.name;
+  document.getElementById("fileSizeText").textContent = formatFileSize(file.size);
+  emptyEl.hidden = true;
+  fileEl.hidden = false;
+}
+
+// "파일 선택" 버튼(클릭 -> 탐색창)과 드래그&드롭을 함께 지원한다. 드롭된
+// 파일은 input.files에 그대로 반영해 handleGenerate가 두 방식 모두 동일하게
+// 동작하도록 하고, 두 경로 모두 드롭존 안에 선택된 파일을 표시한다.
 function setupDropzone() {
   const dropzone = document.getElementById("dropzone");
   const fileInput = document.getElementById("pdfInput");
+  const removeBtn = document.getElementById("fileRemoveBtn");
   if (!dropzone || !fileInput) return;
+
+  fileInput.addEventListener("change", () => {
+    renderSelectedFile(fileInput.files[0] || null);
+  });
+
+  if (removeBtn) {
+    removeBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      fileInput.value = "";
+      renderSelectedFile(null);
+      setStatus("");
+    });
+  }
 
   ["dragenter", "dragover"].forEach((evt) => {
     dropzone.addEventListener(evt, (e) => {
@@ -200,6 +238,7 @@ function setupDropzone() {
       return;
     }
     fileInput.files = files;
+    renderSelectedFile(file);
     setStatus(`"${file.name}" 파일이 선택되었습니다.`);
   });
 }
@@ -207,4 +246,5 @@ function setupDropzone() {
 document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("generateBtn").addEventListener("click", handleGenerate);
   setupDropzone();
+  renderSelectedFile(null);
 });
