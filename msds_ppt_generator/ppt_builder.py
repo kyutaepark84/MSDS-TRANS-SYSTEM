@@ -114,8 +114,9 @@ def _estimate_text_width_emu(text, size_pt):
 
 def _fit_footer_lines(address, company, phone, available_width_emu):
     """전체 문구가 available_width_emu 안에 최대(12pt)~최소(10pt) 크기로 한 줄에
-    들어가면 그 크기의 한 줄로, 10pt에서도 안 들어가면 전화번호 앞에서 두 줄로
-    나눈다(두 줄로도 안 맞으면 회사명 앞에서 나눠본다). 항상 10pt 이상을 유지한다."""
+    들어가면 그 크기의 한 줄로, 10pt에서도 안 들어가면 두 줄로 나눈다. 전화번호가
+    혼자 한 줄을 차지하지 않도록, 우선 회사명과 같은 줄에 붙여본다(그래도 안
+    맞으면 전화번호만 따로 뺀다). 항상 10pt 이상을 유지한다."""
     full = f"※ 공급자 정보 : {address}  {company} ☎ {phone}"
     for size in range(FOOTER_MAX_FONT_PT, FOOTER_MIN_FONT_PT - 1, -1):
         if _estimate_text_width_emu(full, size) <= available_width_emu:
@@ -123,8 +124,8 @@ def _fit_footer_lines(address, company, phone, available_width_emu):
 
     size = FOOTER_MIN_FONT_PT
     candidates = [
-        (f"※ 공급자 정보 : {address}  {company}", f"☎ {phone}"),
         (f"※ 공급자 정보 : {address}", f"{company}  ☎ {phone}"),
+        (f"※ 공급자 정보 : {address}  {company}", f"☎ {phone}"),
     ]
     for line1, line2 in candidates:
         if (_estimate_text_width_emu(line1, size) <= available_width_emu
@@ -134,9 +135,10 @@ def _fit_footer_lines(address, company, phone, available_width_emu):
     return list(candidates[0]), size
 
 
-def _set_footer_text(shape, lines, size_pt):
-    """자동 축소(normAutofit)를 끄고 지정한 크기를 그대로 적용한다. 두 줄이 되면
-    글상자 높이도 필요한 만큼 늘려 아래로 잘리지 않게 한다."""
+def _set_footer_text(shape, lines, size_pt, max_bottom=None):
+    """자동 축소(normAutofit)를 끄고 지정한 크기를 그대로 적용한다. 두 줄이 되어
+    글상자 높이를 늘려야 할 때는 아래쪽 경계(max_bottom, 보통 라벨 바깥 굵은
+    테두리 선의 y좌표)를 넘지 않도록 위쪽으로만 확장한다."""
     txBody = _txbody_of(shape)
     bodyPr = txBody.find(qn("a:bodyPr"))
     for tag in ("a:normAutofit", "a:spAutoFit"):
@@ -158,7 +160,11 @@ def _set_footer_text(shape, lines, size_pt):
 
     needed_height = int(len(lines) * size_pt * 1.2 * EMU_PER_PT) + t_ins + b_ins
     if needed_height > shape.height:
+        bottom = shape.top + shape.height
+        if max_bottom is not None:
+            bottom = min(bottom, max_bottom)
         shape.height = needed_height
+        shape.top = bottom - needed_height
 
 
 # --------------------------------------------------------------------------
@@ -193,6 +199,28 @@ def _place_pictogram_row(slide, slide_width, codes, band_left, band_top, max_siz
         path = os.path.join(PICTOGRAM_DIR, filename)
         x = start_x + i * (size + int(gap))
         slide.shapes.add_picture(path, x, int(band_top), size, size)
+
+
+def _place_pictogram_row_in_cell(slide, cell_left, cell_top, cell_width, cell_height, codes,
+                                  gap=Emu(150000), pad_ratio=0.08):
+    """표 칸(cell) 안에 그림문자를 가로 중앙 정렬로 배치하고, 칸 높이(세로)를
+    기준으로 테두리를 넘지 않는 한도 내에서 최대한 크게 키운다. 아이콘이 많아
+    가로 폭이 부족해지면 폭 기준으로 다시 줄인다."""
+    codes = codes[:MAX_PICTOGRAMS]
+    n = len(codes)
+    if n == 0:
+        return
+    max_size_by_height = int(cell_height * (1 - pad_ratio))
+    max_size_by_width = int((cell_width - (n - 1) * int(gap)) / n)
+    size = max(1, min(max_size_by_height, max_size_by_width))
+    total = n * size + (n - 1) * int(gap)
+    start_x = int(cell_left + (cell_width - total) / 2)
+    y = int(cell_top + (cell_height - size) / 2)
+    for i, code in enumerate(codes):
+        _, filename = ghs.PICTOGRAMS[code]
+        path = os.path.join(PICTOGRAM_DIR, filename)
+        x = start_x + i * (size + int(gap))
+        slide.shapes.add_picture(path, x, y, size, size)
 
 
 # --------------------------------------------------------------------------
@@ -275,7 +303,9 @@ def build_label_slide(msds, out_path, template_path=LABEL_TEMPLATE):
     r_ins = int(bodyPr.get("rIns", "91440"))
     available_width = rect16.width - l_ins - r_ins
     footer_lines, footer_size = _fit_footer_lines(msds.supplier_address, msds.supplier_name, phone, available_width)
-    _set_footer_text(rect16, footer_lines, footer_size)
+    outline = shapes.get("Rectangle 2")
+    max_bottom = (outline.top + outline.height) if outline is not None else None
+    _set_footer_text(rect16, footer_lines, footer_size, max_bottom=max_bottom)
 
     # 표: 유해ㆍ위험 문구 / 예방조치 문구
     table_shape = next(s for s in slide.shapes if s.has_table)
@@ -354,10 +384,13 @@ def build_handling_slide(msds, out_path, template_path=HANDLING_TEMPLATE):
     _replace_paragraphs(tbl.cell(6, 1).text_frame._txBody, _accident_response_bullets(msds))
 
     pic_names = {s.name for s in slide.shapes if s.shape_type == MSO_SHAPE_TYPE.PICTURE}
-    first_pic = next(s for s in slide.shapes if s.name in pic_names)
-    band_left, band_top, band_size = first_pic.left, first_pic.top, first_pic.width
     _remove_pictures(slide, pic_names)
+    # 그림문자 칸은 표 2번째 행(가로 두 칸 병합)이다. 그 칸의 실제 좌표를 계산해
+    # 그 안에서 가로 중앙 정렬 + 칸 높이에 맞춘 최대 크기로 배치한다.
+    rows = list(tbl.rows)
+    pic_row_top = table_shape.top + rows[0].height
+    pic_row_height = rows[1].height
     codes = ghs.pictograms_for_hcodes([c for c, _ in msds.hazard_statements])
-    _place_pictogram_row(slide, prs.slide_width, codes, band_left, band_top, band_size)
+    _place_pictogram_row_in_cell(slide, table_shape.left, pic_row_top, table_shape.width, pic_row_height, codes)
 
     prs.save(out_path)

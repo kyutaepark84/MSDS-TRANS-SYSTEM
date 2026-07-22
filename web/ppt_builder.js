@@ -101,6 +101,12 @@ function shapeExt(shapeEl) {
   return firstEl(xfrm, NS.a, "ext");
 }
 
+function shapeOff(shapeEl) {
+  const spPr = firstEl(shapeEl, NS.p, "spPr");
+  const xfrm = firstEl(spPr, NS.a, "xfrm");
+  return firstEl(xfrm, NS.a, "off");
+}
+
 // --------------------------------------------------------------------------
 // 단락/텍스트 조작 (msds_ppt_generator/ppt_builder.py 와 동일한 접근)
 // --------------------------------------------------------------------------
@@ -163,9 +169,11 @@ function fitFooterLines(address, company, phone, availableWidthEmu) {
     if (estimateTextWidthEmu(full, size) <= availableWidthEmu) return { lines: [full], size };
   }
   const size = FOOTER_MIN_FONT_PT;
+  // 전화번호가 혼자 한 줄을 차지하지 않도록, 우선 회사명과 같은 줄에 붙여본다
+  // (그래도 안 맞으면 전화번호만 따로 뺀다).
   const candidates = [
-    [`※ 공급자 정보 : ${address}  ${company}`, `☎ ${phone}`],
     [`※ 공급자 정보 : ${address}`, `${company}  ☎ ${phone}`],
+    [`※ 공급자 정보 : ${address}  ${company}`, `☎ ${phone}`],
   ];
   for (const [line1, line2] of candidates) {
     if (estimateTextWidthEmu(line1, size) <= availableWidthEmu && estimateTextWidthEmu(line2, size) <= availableWidthEmu) {
@@ -175,7 +183,7 @@ function fitFooterLines(address, company, phone, availableWidthEmu) {
   return { lines: candidates[0], size };
 }
 
-function setFooterText(shapeEl, lines, sizePt) {
+function setFooterText(shapeEl, lines, sizePt, maxBottom = null) {
   const txBody = txBodyOf(shapeEl);
   const bodyPr = firstEl(txBody, NS.a, "bodyPr");
   for (const tag of ["normAutofit", "spAutoFit"]) {
@@ -199,8 +207,17 @@ function setFooterText(shapeEl, lines, sizePt) {
 
   const neededHeight = Math.round(lines.length * sizePt * 1.2 * EMU_PER_PT) + tIns + bIns;
   const ext = shapeExt(shapeEl);
+  const off = shapeOff(shapeEl);
   const curHeight = parseInt(ext.getAttribute("cy"), 10);
-  if (neededHeight > curHeight) ext.setAttribute("cy", String(neededHeight));
+  if (neededHeight > curHeight) {
+    // 글상자 높이를 늘려야 할 때, 아래쪽 경계(maxBottom, 보통 라벨 바깥 굵은
+    // 테두리 선의 y좌표)를 넘지 않도록 위쪽으로만 확장한다.
+    const curTop = parseInt(off.getAttribute("y"), 10);
+    let bottom = curTop + curHeight;
+    if (maxBottom !== null) bottom = Math.min(bottom, maxBottom);
+    ext.setAttribute("cy", String(neededHeight));
+    off.setAttribute("y", String(Math.round(bottom - neededHeight)));
+  }
 }
 
 // --------------------------------------------------------------------------
@@ -213,6 +230,42 @@ function applyPictogramSlots(doc, zip, slots, codes) {
     if (i < capped.length) {
       const bytes = base64ToUint8Array(MSDS_ASSETS.pictograms[capped[i]]);
       zip.file(slots[i].mediaPath, bytes);
+    } else {
+      const pic = findPictureByName(doc, slots[i].name);
+      if (pic && pic.parentNode) pic.parentNode.removeChild(pic);
+    }
+  }
+}
+
+function repositionPictureShape(pic, x, y, size) {
+  const spPr = firstEl(pic, NS.p, "spPr");
+  const xfrm = firstEl(spPr, NS.a, "xfrm");
+  const off = firstEl(xfrm, NS.a, "off");
+  const ext = firstEl(xfrm, NS.a, "ext");
+  off.setAttribute("x", String(Math.round(x)));
+  off.setAttribute("y", String(Math.round(y)));
+  ext.setAttribute("cx", String(Math.round(size)));
+  ext.setAttribute("cy", String(Math.round(size)));
+}
+
+// 표 칸(cell) 안에 그림문자를 가로 중앙 정렬로 배치하고, 칸 높이를 기준으로
+// 테두리를 넘지 않는 한도 내에서 최대한 크게 키운다(msds_ppt_generator/ppt_builder.py
+// 의 _place_pictogram_row_in_cell 과 동일한 로직).
+function applyPictogramSlotsCentered(doc, zip, slots, codes, cellLeft, cellTop, cellWidth, cellHeight, gap = 150000, padRatio = 0.08) {
+  const capped = codes.slice(0, MAX_PICTOGRAMS_WEB);
+  const n = capped.length;
+  const maxByHeight = cellHeight * (1 - padRatio);
+  const maxByWidth = n > 0 ? (cellWidth - (n - 1) * gap) / n : 0;
+  const size = n > 0 ? Math.max(1, Math.min(maxByHeight, maxByWidth)) : 0;
+  const total = n * size + (n - 1) * gap;
+  const startX = cellLeft + (cellWidth - total) / 2;
+  const y = cellTop + (cellHeight - size) / 2;
+  for (let i = 0; i < slots.length; i++) {
+    if (i < n) {
+      const bytes = base64ToUint8Array(MSDS_ASSETS.pictograms[capped[i]]);
+      zip.file(slots[i].mediaPath, bytes);
+      const pic = findPictureByName(doc, slots[i].name);
+      if (pic) repositionPictureShape(pic, startX + i * (size + gap), y, size);
     } else {
       const pic = findPictureByName(doc, slots[i].name);
       if (pic && pic.parentNode) pic.parentNode.removeChild(pic);
@@ -295,7 +348,14 @@ async function buildLabelSlide(msds) {
   const { lines: footerLines, size: footerSize } = fitFooterLines(
     msds.supplierAddress, msds.supplierName, phone, availableWidth
   );
-  setFooterText(rect16, footerLines, footerSize);
+  const outline = findShapeByName(doc, "Rectangle 2");
+  let maxBottom = null;
+  if (outline) {
+    const outlineOff = shapeOff(outline);
+    const outlineExt = shapeExt(outline);
+    maxBottom = parseInt(outlineOff.getAttribute("y"), 10) + parseInt(outlineExt.getAttribute("cy"), 10);
+  }
+  setFooterText(rect16, footerLines, footerSize, maxBottom);
 
   // 표: 유해ㆍ위험 문구 / 예방조치 문구
   const tableShape = findTableShape(doc);
@@ -371,8 +431,20 @@ async function buildHandlingSlide(msds) {
   replaceParagraphs(firstEl(cellsOf(5)[1], NS.a, "txBody"), firstAidBullets(msds));
   replaceParagraphs(firstEl(cellsOf(6)[1], NS.a, "txBody"), accidentResponseBullets(msds));
 
+  // 그림문자 칸은 표 2번째 행(가로 두 칸 병합)이다. 그 칸의 실제 좌표를 계산해
+  // 그 안에서 가로 중앙 정렬 + 칸 높이에 맞춘 최대 크기로 배치한다.
+  const tblXfrm = firstEl(tableShape, NS.p, "xfrm");
+  const tblOff = firstEl(tblXfrm, NS.a, "off");
+  const tblExt = firstEl(tblXfrm, NS.a, "ext");
+  const tableLeft = parseInt(tblOff.getAttribute("x"), 10);
+  const tableTop = parseInt(tblOff.getAttribute("y"), 10);
+  const tableWidth = parseInt(tblExt.getAttribute("cx"), 10);
+  const row0Height = parseInt(rows[0].getAttribute("h"), 10);
+  const row1Height = parseInt(rows[1].getAttribute("h"), 10);
+  const picCellTop = tableTop + row0Height;
+
   const codes = pictogramsForHcodes(msds.hazardStatements.map(([c]) => c));
-  applyPictogramSlots(doc, zip, HANDLING_PICTURE_SLOTS, codes);
+  applyPictogramSlotsCentered(doc, zip, HANDLING_PICTURE_SLOTS, codes, tableLeft, picCellTop, tableWidth, row1Height);
 
   zip.file("ppt/slides/slide1.xml", serializeDoc(doc));
   return zip.generateAsync({ type: "blob", mimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation" });
