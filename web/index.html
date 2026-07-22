@@ -83,12 +83,33 @@
     color: #777;
     margin-top: 24px;
   }
+  .dropzone {
+    border: 2px dashed #b6b6b6;
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 16px;
+    text-align: center;
+    transition: border-color 0.15s ease, background-color 0.15s ease;
+  }
+  .dropzone.dragover {
+    border-color: #1a5fb4;
+    background: rgba(26, 95, 180, 0.06);
+  }
+  .dropzone input[type="file"] {
+    margin-bottom: 8px;
+  }
+  .dropzone-hint {
+    font-size: 13px;
+    color: #777;
+  }
   @media (prefers-color-scheme: dark) {
     body { color: #eee; background: #1e1e1e; }
-    p.lead, .note { color: #aaa; }
+    p.lead, .note, .dropzone-hint { color: #aaa; }
     .card { border-color: #444; }
     input { background: #2a2a2a; color: #eee; border-color: #555; }
     .result-row { border-color: #333; }
+    .dropzone { border-color: #555; }
+    .dropzone.dragover { border-color: #4a90e2; background: rgba(74, 144, 226, 0.1); }
   }
 </style>
 </head>
@@ -99,7 +120,10 @@
 
 <div class="card">
   <label for="pdfInput">MSDS PDF 파일</label>
-  <input type="file" id="pdfInput" accept="application/pdf" />
+  <div class="dropzone" id="dropzone">
+    <input type="file" id="pdfInput" accept="application/pdf" />
+    <div class="dropzone-hint">또는 이 영역으로 파일을 끌어다 놓으세요 (Drag &amp; Drop)</div>
+  </div>
 
   <label for="seqInput">사내 관리번호 (선택, 예: 21)</label>
   <input type="text" id="seqInput" placeholder="비워두면 번호 없이 생성됩니다" />

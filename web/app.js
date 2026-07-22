@@ -167,6 +167,44 @@ function addResultRow(container, filename, blob) {
   container.appendChild(row);
 }
 
+// 기존 "파일 선택" 버튼(클릭 -> 탐색창)과 병행해서, 파일을 영역에 끌어다 놓는
+// 방식도 지원한다. 드롭된 파일을 input.files에 그대로 반영해 handleGenerate가
+// 두 방식 모두 동일하게 동작하도록 한다.
+function setupDropzone() {
+  const dropzone = document.getElementById("dropzone");
+  const fileInput = document.getElementById("pdfInput");
+  if (!dropzone || !fileInput) return;
+
+  ["dragenter", "dragover"].forEach((evt) => {
+    dropzone.addEventListener(evt, (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dropzone.classList.add("dragover");
+    });
+  });
+
+  ["dragleave", "dragend", "drop"].forEach((evt) => {
+    dropzone.addEventListener(evt, (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dropzone.classList.remove("dragover");
+    });
+  });
+
+  dropzone.addEventListener("drop", (e) => {
+    const files = e.dataTransfer && e.dataTransfer.files;
+    if (!files || !files.length) return;
+    const file = files[0];
+    if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
+      setStatus("PDF 파일만 지원합니다.", true);
+      return;
+    }
+    fileInput.files = files;
+    setStatus(`"${file.name}" 파일이 선택되었습니다.`);
+  });
+}
+
 document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("generateBtn").addEventListener("click", handleGenerate);
+  setupDropzone();
 });
