@@ -145,6 +145,11 @@ function replaceParagraphs(txBody, lines, templateIndex = 0) {
 const EMU_PER_PT = 12700;
 const FOOTER_MAX_FONT_PT = 12;
 const FOOTER_MIN_FONT_PT = 10;
+const TITLE_MAX_FONT_PT = 28;
+const TITLE_MIN_FONT_PT = 20;
+const COMPOSITION_MAX_FONT_PT = 12;
+const COMPOSITION_MIN_FONT_PT = 9;
+const LINE_HEIGHT_FACTOR = 1.2;
 const WIDE_CHAR_EXTRA = new Set([0x203b, 0x260e, 0x2605, 0x2606, 0x2600]);
 
 function isWideChar(ch) {
@@ -222,6 +227,26 @@ function setFooterText(shapeEl, lines, sizePt, maxBottom = null) {
     ext.setAttribute("cy", String(neededHeight));
     off.setAttribute("y", String(Math.round(bottom - neededHeight)));
   }
+}
+
+// --------------------------------------------------------------------------
+// 제품명 + 성분 목록 글상자 자동 축소
+// --------------------------------------------------------------------------
+
+// 제품명(제목) + 성분 목록이 상자 높이 안에 들어가도록 글자 크기를 정한다.
+// 상자는 세로 가운데 정렬(anchor=ctr)이라 성분이 많아 전체 내용이 길어지면
+// 위/아래로 넘쳐 인쇄 서식 경계(제목 위쪽 테두리 등)를 넘어갈 수 있어, 성분
+// 목록 글자 크기부터 줄이고 그래도 안 맞으면 제목도 줄인다.
+function fitTitleCompositionSizes(nRows, usablePt) {
+  for (let contentPt = COMPOSITION_MAX_FONT_PT; contentPt >= COMPOSITION_MIN_FONT_PT; contentPt--) {
+    const needed = LINE_HEIGHT_FACTOR * TITLE_MAX_FONT_PT + LINE_HEIGHT_FACTOR * contentPt * nRows;
+    if (needed <= usablePt) return { titlePt: TITLE_MAX_FONT_PT, contentPt };
+  }
+  for (let titlePt = TITLE_MAX_FONT_PT; titlePt >= TITLE_MIN_FONT_PT; titlePt--) {
+    const needed = LINE_HEIGHT_FACTOR * titlePt + LINE_HEIGHT_FACTOR * COMPOSITION_MIN_FONT_PT * nRows;
+    if (needed <= usablePt) return { titlePt, contentPt: COMPOSITION_MIN_FONT_PT };
+  }
+  return { titlePt: TITLE_MIN_FONT_PT, contentPt: COMPOSITION_MIN_FONT_PT };
 }
 
 // --------------------------------------------------------------------------
@@ -326,7 +351,8 @@ async function buildLabelSlide(msds) {
   const rect14 = findShapeByName(doc, "Rectangle 14");
   const txBody14 = txBodyOf(rect14);
   const ps = allEls(txBody14, NS.a, "p");
-  setParagraphText(ps[0], msds.productName);
+  const titleP = ps[0];
+  setParagraphText(titleP, msds.productName);
   const compTemplateIdx = ps.length > 1 ? 1 : 0;
   const compTemplate = ps[compTemplateIdx].cloneNode(true);
   for (let i = ps.length - 1; i >= 1; i--) txBody14.removeChild(ps[i]);
@@ -335,6 +361,41 @@ async function buildLabelSlide(msds) {
     const contentDisp = content.endsWith("%") ? content : `${content}%`;
     setParagraphText(newP, `( CAS No. : ${cas} ,  함유량 : ${contentDisp}) - ${name}`);
     txBody14.appendChild(newP);
+  }
+
+  // 상자가 세로 가운데 정렬이라, 성분이 많아 전체 내용이 길어지면 제목이
+  // 위쪽 테두리를 넘어가 버릴 수 있다. 성분 개수에 맞춰 제목/성분 목록
+  // 글자 크기를 다시 계산해 상자 높이 안에 들어오도록 한다.
+  const rect14Ext = shapeExt(rect14);
+  const rect14Off = shapeOff(rect14);
+  const rect14Height = parseInt(rect14Ext.getAttribute("cy"), 10);
+  const rect14Top = parseInt(rect14Off.getAttribute("y"), 10);
+  const bodyPr14 = firstEl(txBody14, NS.a, "bodyPr");
+  const tIns14 = parseInt(bodyPr14.getAttribute("tIns") || "45720", 10);
+  const bIns14 = parseInt(bodyPr14.getAttribute("bIns") || "45720", 10);
+  let usablePt = (rect14Height - tIns14 - bIns14) / EMU_PER_PT;
+  // 이 상자는 원래 인쇄 테두리(outline)보다 살짝 위에서부터 시작하도록
+  // 설계돼 있다. 세로 가운데 정렬이라 내용이 길어지면 그 여백의 절반만큼
+  // 제목이 테두리 위로 삐져나갈 수 있어, 그 간격의 2배만큼 여유 높이를
+  // 미리 깎아 두어 제목이 항상 테두리 안쪽에 머물도록 한다.
+  const outlineForTitle = findShapeByName(doc, "Rectangle 2");
+  if (outlineForTitle) {
+    const outlineOffForTitle = shapeOff(outlineForTitle);
+    const outlineTop = parseInt(outlineOffForTitle.getAttribute("y"), 10);
+    const topGapPt = Math.max(0, outlineTop - rect14Top - tIns14) / EMU_PER_PT;
+    usablePt -= 2 * topGapPt;
+  }
+  const { titlePt, contentPt } = fitTitleCompositionSizes(msds.composition.length, usablePt);
+  for (const r of allEls(titleP, NS.a, "r")) {
+    const rPr = firstEl(r, NS.a, "rPr");
+    if (rPr) rPr.setAttribute("sz", String(Math.round(titlePt * 100)));
+  }
+  const compPs = allEls(txBody14, NS.a, "p").slice(1);
+  for (const p of compPs) {
+    for (const r of allEls(p, NS.a, "r")) {
+      const rPr = firstEl(r, NS.a, "rPr");
+      if (rPr) rPr.setAttribute("sz", String(Math.round(contentPt * 100)));
+    }
   }
 
   // 신호어

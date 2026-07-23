@@ -168,6 +168,33 @@ def _set_footer_text(shape, lines, size_pt, max_bottom=None):
 
 
 # --------------------------------------------------------------------------
+# 제품명 + 성분 목록 글상자 자동 축소
+# --------------------------------------------------------------------------
+
+TITLE_MAX_FONT_PT = 28
+TITLE_MIN_FONT_PT = 20
+COMPOSITION_MAX_FONT_PT = 12
+COMPOSITION_MIN_FONT_PT = 9
+_LINE_HEIGHT_FACTOR = 1.2
+
+
+def _fit_title_composition_sizes(n_rows, usable_pt):
+    """제품명(제목) + 성분 목록이 상자 높이 안에 들어가도록 글자 크기를
+    정한다. 상자는 세로 가운데 정렬(anchor=ctr)이라 성분이 많아 전체 내용이
+    길어지면 위/아래로 넘쳐 인쇄 서식 경계(제목 위쪽 테두리 등)를 넘어갈 수
+    있어, 성분 목록 글자 크기부터 줄이고 그래도 안 맞으면 제목도 줄인다."""
+    for content_pt in range(COMPOSITION_MAX_FONT_PT, COMPOSITION_MIN_FONT_PT - 1, -1):
+        needed = _LINE_HEIGHT_FACTOR * TITLE_MAX_FONT_PT + _LINE_HEIGHT_FACTOR * content_pt * n_rows
+        if needed <= usable_pt:
+            return TITLE_MAX_FONT_PT, content_pt
+    for title_pt in range(TITLE_MAX_FONT_PT, TITLE_MIN_FONT_PT - 1, -1):
+        needed = _LINE_HEIGHT_FACTOR * title_pt + _LINE_HEIGHT_FACTOR * COMPOSITION_MIN_FONT_PT * n_rows
+        if needed <= usable_pt:
+            return title_pt, COMPOSITION_MIN_FONT_PT
+    return TITLE_MIN_FONT_PT, COMPOSITION_MIN_FONT_PT
+
+
+# --------------------------------------------------------------------------
 # 그림문자(그림) 배치
 # --------------------------------------------------------------------------
 
@@ -290,6 +317,32 @@ def build_label_slide(msds, out_path, template_path=LABEL_TEMPLATE):
         content_disp = content if content.endswith("%") else f"{content}%"
         _set_paragraph_text(new_p, f"( CAS No. : {cas} ,  함유량 : {content_disp}) - {name}")
         txBody.append(new_p)
+
+    # 상자가 세로 가운데 정렬이라, 성분이 많아 전체 내용이 길어지면 제목이
+    # 위쪽 테두리를 넘어가 버릴 수 있다. 성분 개수에 맞춰 제목/성분 목록
+    # 글자 크기를 다시 계산해 상자 높이 안에 들어오도록 한다.
+    bodyPr14 = txBody.find(qn("a:bodyPr"))
+    t_ins14 = int(bodyPr14.get("tIns", "45720"))
+    b_ins14 = int(bodyPr14.get("bIns", "45720"))
+    usable_pt = (rect14.height - t_ins14 - b_ins14) / EMU_PER_PT
+    # 이 상자는 원래 인쇄 테두리(outline)보다 살짝 위에서부터 시작하도록
+    # 설계돼 있다. 세로 가운데 정렬이라 내용이 길어지면 그 여백의 절반만큼
+    # 제목이 테두리 위로 삐져나갈 수 있어, 그 간격의 2배만큼 여유 높이를
+    # 미리 깎아 두어 제목이 항상 테두리 안쪽에 머물도록 한다.
+    outline = shapes.get("Rectangle 2")
+    if outline is not None:
+        top_gap_pt = max(0, outline.top - rect14.top - t_ins14) / EMU_PER_PT
+        usable_pt -= 2 * top_gap_pt
+    title_pt, content_pt = _fit_title_composition_sizes(len(msds.composition), usable_pt)
+    for r in title_p.findall(qn("a:r")):
+        rPr = r.find(qn("a:rPr"))
+        if rPr is not None:
+            rPr.set("sz", str(int(title_pt * 100)))
+    for p in txBody.findall(qn("a:p"))[1:]:
+        for r in p.findall(qn("a:r")):
+            rPr = r.find(qn("a:rPr"))
+            if rPr is not None:
+                rPr.set("sz", str(int(content_pt * 100)))
 
     # 신호어
     rect15 = shapes["Rectangle 15"]
