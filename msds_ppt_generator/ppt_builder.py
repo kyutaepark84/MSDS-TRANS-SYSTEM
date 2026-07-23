@@ -171,27 +171,29 @@ def _set_footer_text(shape, lines, size_pt, max_bottom=None):
 # 제품명 + 성분 목록 글상자 자동 축소
 # --------------------------------------------------------------------------
 
-TITLE_MAX_FONT_PT = 28
-TITLE_MIN_FONT_PT = 20
+TITLE_FIXED_FONT_PT = 36
 COMPOSITION_MAX_FONT_PT = 12
-COMPOSITION_MIN_FONT_PT = 9
+COMPOSITION_MIN_FONT_PT = 8
 _LINE_HEIGHT_FACTOR = 1.2
+# 그림문자(그림)와 상자 사이에 남겨 둘 최소 여백.
+PICTOGRAM_GAP_EMU = 50000
 
 
-def _fit_title_composition_sizes(n_rows, usable_pt):
-    """제품명(제목) + 성분 목록이 상자 높이 안에 들어가도록 글자 크기를
-    정한다. 상자는 세로 가운데 정렬(anchor=ctr)이라 성분이 많아 전체 내용이
-    길어지면 위/아래로 넘쳐 인쇄 서식 경계(제목 위쪽 테두리 등)를 넘어갈 수
-    있어, 성분 목록 글자 크기부터 줄이고 그래도 안 맞으면 제목도 줄인다."""
+def _fit_label_composition_size(n_rows, t_ins, b_ins, top_gap_emu, max_height_emu):
+    """제목(36pt 고정) + 성분 목록이 상자 높이 안에 들어가도록 성분 목록
+    글자 크기와 상자에 필요한 높이를 정한다. 상자는 세로 가운데 정렬(anchor=ctr)
+    이라 내용이 길어지면 위/아래로 넘쳐 인쇄 서식 경계(제목 위쪽 테두리, 그림문자
+    영역)를 넘어갈 수 있어, 성분 목록 글자 크기부터 줄이고 그래도 안 맞으면
+    상자 높이를(그림문자와 겹치지 않는 한도까지) 늘린다."""
     for content_pt in range(COMPOSITION_MAX_FONT_PT, COMPOSITION_MIN_FONT_PT - 1, -1):
-        needed = _LINE_HEIGHT_FACTOR * TITLE_MAX_FONT_PT + _LINE_HEIGHT_FACTOR * content_pt * n_rows
-        if needed <= usable_pt:
-            return TITLE_MAX_FONT_PT, content_pt
-    for title_pt in range(TITLE_MAX_FONT_PT, TITLE_MIN_FONT_PT - 1, -1):
-        needed = _LINE_HEIGHT_FACTOR * title_pt + _LINE_HEIGHT_FACTOR * COMPOSITION_MIN_FONT_PT * n_rows
-        if needed <= usable_pt:
-            return title_pt, COMPOSITION_MIN_FONT_PT
-    return TITLE_MIN_FONT_PT, COMPOSITION_MIN_FONT_PT
+        needed = (_LINE_HEIGHT_FACTOR * (TITLE_FIXED_FONT_PT + content_pt * n_rows) * EMU_PER_PT
+                  + t_ins + b_ins + 2 * top_gap_emu)
+        if needed <= max_height_emu:
+            return content_pt, needed
+    content_pt = COMPOSITION_MIN_FONT_PT
+    needed = (_LINE_HEIGHT_FACTOR * (TITLE_FIXED_FONT_PT + content_pt * n_rows) * EMU_PER_PT
+              + t_ins + b_ins + 2 * top_gap_emu)
+    return content_pt, min(needed, max_height_emu)
 
 
 # --------------------------------------------------------------------------
@@ -319,25 +321,30 @@ def build_label_slide(msds, out_path, template_path=LABEL_TEMPLATE):
         txBody.append(new_p)
 
     # 상자가 세로 가운데 정렬이라, 성분이 많아 전체 내용이 길어지면 제목이
-    # 위쪽 테두리를 넘어가 버릴 수 있다. 성분 개수에 맞춰 제목/성분 목록
-    # 글자 크기를 다시 계산해 상자 높이 안에 들어오도록 한다.
+    # 위쪽 테두리를 넘어가거나 아래쪽 그림문자와 겹칠 수 있다. 제목은 항상
+    # 36pt 굵게 고정하고, 성분 목록 글자 크기와 상자 높이를 성분 개수에 맞춰
+    # 다시 계산해 위쪽 테두리와 그림문자 사이 안에 들어오도록 한다.
     bodyPr14 = txBody.find(qn("a:bodyPr"))
     t_ins14 = int(bodyPr14.get("tIns", "45720"))
     b_ins14 = int(bodyPr14.get("bIns", "45720"))
-    usable_pt = (rect14.height - t_ins14 - b_ins14) / EMU_PER_PT
-    # 이 상자는 원래 인쇄 테두리(outline)보다 살짝 위에서부터 시작하도록
-    # 설계돼 있다. 세로 가운데 정렬이라 내용이 길어지면 그 여백의 절반만큼
-    # 제목이 테두리 위로 삐져나갈 수 있어, 그 간격의 2배만큼 여유 높이를
-    # 미리 깎아 두어 제목이 항상 테두리 안쪽에 머물도록 한다.
     outline = shapes.get("Rectangle 2")
-    if outline is not None:
-        top_gap_pt = max(0, outline.top - rect14.top - t_ins14) / EMU_PER_PT
-        usable_pt -= 2 * top_gap_pt
-    title_pt, content_pt = _fit_title_composition_sizes(len(msds.composition), usable_pt)
+    top_gap_emu = max(0, outline.top - rect14.top - t_ins14) if outline is not None else 0
+    pic_tops = [s.top for s in slide.shapes if s.shape_type == MSO_SHAPE_TYPE.PICTURE]
+    if pic_tops:
+        max_bottom = min(pic_tops) - PICTOGRAM_GAP_EMU
+        max_height = max(rect14.height, max_bottom - rect14.top)
+    else:
+        max_height = rect14.height
+    content_pt, required_height = _fit_label_composition_size(
+        len(msds.composition), t_ins14, b_ins14, top_gap_emu, max_height
+    )
+    if required_height > rect14.height:
+        rect14.height = int(required_height)
     for r in title_p.findall(qn("a:r")):
         rPr = r.find(qn("a:rPr"))
         if rPr is not None:
-            rPr.set("sz", str(int(title_pt * 100)))
+            rPr.set("sz", str(int(TITLE_FIXED_FONT_PT * 100)))
+            rPr.set("b", "1")
     for p in txBody.findall(qn("a:p"))[1:]:
         for r in p.findall(qn("a:r")):
             rPr = r.find(qn("a:rPr"))

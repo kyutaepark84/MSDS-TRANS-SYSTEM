@@ -145,11 +145,12 @@ function replaceParagraphs(txBody, lines, templateIndex = 0) {
 const EMU_PER_PT = 12700;
 const FOOTER_MAX_FONT_PT = 12;
 const FOOTER_MIN_FONT_PT = 10;
-const TITLE_MAX_FONT_PT = 28;
-const TITLE_MIN_FONT_PT = 20;
+const TITLE_FIXED_FONT_PT = 36;
 const COMPOSITION_MAX_FONT_PT = 12;
-const COMPOSITION_MIN_FONT_PT = 9;
+const COMPOSITION_MIN_FONT_PT = 8;
 const LINE_HEIGHT_FACTOR = 1.2;
+// 그림문자(그림)와 상자 사이에 남겨 둘 최소 여백.
+const PICTOGRAM_GAP_EMU = 50000;
 const WIDE_CHAR_EXTRA = new Set([0x203b, 0x260e, 0x2605, 0x2606, 0x2600]);
 
 function isWideChar(ch) {
@@ -233,20 +234,21 @@ function setFooterText(shapeEl, lines, sizePt, maxBottom = null) {
 // 제품명 + 성분 목록 글상자 자동 축소
 // --------------------------------------------------------------------------
 
-// 제품명(제목) + 성분 목록이 상자 높이 안에 들어가도록 글자 크기를 정한다.
-// 상자는 세로 가운데 정렬(anchor=ctr)이라 성분이 많아 전체 내용이 길어지면
-// 위/아래로 넘쳐 인쇄 서식 경계(제목 위쪽 테두리 등)를 넘어갈 수 있어, 성분
-// 목록 글자 크기부터 줄이고 그래도 안 맞으면 제목도 줄인다.
-function fitTitleCompositionSizes(nRows, usablePt) {
+// 제목(36pt 고정) + 성분 목록이 상자 높이 안에 들어가도록 성분 목록 글자
+// 크기와 상자에 필요한 높이를 정한다. 상자는 세로 가운데 정렬(anchor=ctr)
+// 이라 내용이 길어지면 위/아래로 넘쳐 인쇄 서식 경계(제목 위쪽 테두리, 그림문자
+// 영역)를 넘어갈 수 있어, 성분 목록 글자 크기부터 줄이고 그래도 안 맞으면
+// 상자 높이를(그림문자와 겹치지 않는 한도까지) 늘린다.
+function fitLabelCompositionSize(nRows, tIns, bIns, topGapEmu, maxHeightEmu) {
   for (let contentPt = COMPOSITION_MAX_FONT_PT; contentPt >= COMPOSITION_MIN_FONT_PT; contentPt--) {
-    const needed = LINE_HEIGHT_FACTOR * TITLE_MAX_FONT_PT + LINE_HEIGHT_FACTOR * contentPt * nRows;
-    if (needed <= usablePt) return { titlePt: TITLE_MAX_FONT_PT, contentPt };
+    const needed = LINE_HEIGHT_FACTOR * (TITLE_FIXED_FONT_PT + contentPt * nRows) * EMU_PER_PT
+      + tIns + bIns + 2 * topGapEmu;
+    if (needed <= maxHeightEmu) return { contentPt, requiredHeight: needed };
   }
-  for (let titlePt = TITLE_MAX_FONT_PT; titlePt >= TITLE_MIN_FONT_PT; titlePt--) {
-    const needed = LINE_HEIGHT_FACTOR * titlePt + LINE_HEIGHT_FACTOR * COMPOSITION_MIN_FONT_PT * nRows;
-    if (needed <= usablePt) return { titlePt, contentPt: COMPOSITION_MIN_FONT_PT };
-  }
-  return { titlePt: TITLE_MIN_FONT_PT, contentPt: COMPOSITION_MIN_FONT_PT };
+  const contentPt = COMPOSITION_MIN_FONT_PT;
+  const needed = LINE_HEIGHT_FACTOR * (TITLE_FIXED_FONT_PT + contentPt * nRows) * EMU_PER_PT
+    + tIns + bIns + 2 * topGapEmu;
+  return { contentPt, requiredHeight: Math.min(needed, maxHeightEmu) };
 }
 
 // --------------------------------------------------------------------------
@@ -364,8 +366,9 @@ async function buildLabelSlide(msds) {
   }
 
   // 상자가 세로 가운데 정렬이라, 성분이 많아 전체 내용이 길어지면 제목이
-  // 위쪽 테두리를 넘어가 버릴 수 있다. 성분 개수에 맞춰 제목/성분 목록
-  // 글자 크기를 다시 계산해 상자 높이 안에 들어오도록 한다.
+  // 위쪽 테두리를 넘어가거나 아래쪽 그림문자와 겹칠 수 있다. 제목은 항상
+  // 36pt 굵게 고정하고, 성분 목록 글자 크기와 상자 높이를 성분 개수에 맞춰
+  // 다시 계산해 위쪽 테두리와 그림문자 사이 안에 들어오도록 한다.
   const rect14Ext = shapeExt(rect14);
   const rect14Off = shapeOff(rect14);
   const rect14Height = parseInt(rect14Ext.getAttribute("cy"), 10);
@@ -373,22 +376,34 @@ async function buildLabelSlide(msds) {
   const bodyPr14 = firstEl(txBody14, NS.a, "bodyPr");
   const tIns14 = parseInt(bodyPr14.getAttribute("tIns") || "45720", 10);
   const bIns14 = parseInt(bodyPr14.getAttribute("bIns") || "45720", 10);
-  let usablePt = (rect14Height - tIns14 - bIns14) / EMU_PER_PT;
-  // 이 상자는 원래 인쇄 테두리(outline)보다 살짝 위에서부터 시작하도록
-  // 설계돼 있다. 세로 가운데 정렬이라 내용이 길어지면 그 여백의 절반만큼
-  // 제목이 테두리 위로 삐져나갈 수 있어, 그 간격의 2배만큼 여유 높이를
-  // 미리 깎아 두어 제목이 항상 테두리 안쪽에 머물도록 한다.
   const outlineForTitle = findShapeByName(doc, "Rectangle 2");
+  let topGapEmu = 0;
   if (outlineForTitle) {
     const outlineOffForTitle = shapeOff(outlineForTitle);
     const outlineTop = parseInt(outlineOffForTitle.getAttribute("y"), 10);
-    const topGapPt = Math.max(0, outlineTop - rect14Top - tIns14) / EMU_PER_PT;
-    usablePt -= 2 * topGapPt;
+    topGapEmu = Math.max(0, outlineTop - rect14Top - tIns14);
   }
-  const { titlePt, contentPt } = fitTitleCompositionSizes(msds.composition.length, usablePt);
+  const picTops = LABEL_PICTURE_SLOTS
+    .map((slot) => findPictureByName(doc, slot.name))
+    .filter(Boolean)
+    .map((pic) => parseInt(shapeOff(pic).getAttribute("y"), 10));
+  let maxHeight = rect14Height;
+  if (picTops.length) {
+    const maxBottomForTitle = Math.min(...picTops) - PICTOGRAM_GAP_EMU;
+    maxHeight = Math.max(rect14Height, maxBottomForTitle - rect14Top);
+  }
+  const { contentPt, requiredHeight } = fitLabelCompositionSize(
+    msds.composition.length, tIns14, bIns14, topGapEmu, maxHeight
+  );
+  if (requiredHeight > rect14Height) {
+    rect14Ext.setAttribute("cy", String(Math.round(requiredHeight)));
+  }
   for (const r of allEls(titleP, NS.a, "r")) {
     const rPr = firstEl(r, NS.a, "rPr");
-    if (rPr) rPr.setAttribute("sz", String(Math.round(titlePt * 100)));
+    if (rPr) {
+      rPr.setAttribute("sz", String(Math.round(TITLE_FIXED_FONT_PT * 100)));
+      rPr.setAttribute("b", "1");
+    }
   }
   const compPs = allEls(txBody14, NS.a, "p").slice(1);
   for (const p of compPs) {
