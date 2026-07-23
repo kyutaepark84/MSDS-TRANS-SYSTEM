@@ -199,6 +199,14 @@ function setupDropzone() {
   const removeBtn = document.getElementById("fileRemoveBtn");
   if (!dropzone || !fileInput) return;
 
+  // 커서가 드롭존을 살짝 벗어난 지점(카드 여백, 페이지 배경 등)에 파일을
+  // 놓으면 그 지점에는 우리 쪽 preventDefault가 걸려있지 않아, 브라우저가
+  // 기본 동작(파일을 새 탭으로 열거나 내려받는 동작)을 그대로 수행해버린다.
+  // 그래서 페이지 전체에서 dragover/drop 기본 동작을 항상 막아, 드롭존
+  // 바깥에 떨어뜨려도 브라우저가 파일을 가로채지 않도록 안전망을 둔다.
+  window.addEventListener("dragover", (e) => e.preventDefault());
+  window.addEventListener("drop", (e) => e.preventDefault());
+
   fileInput.addEventListener("change", () => {
     renderSelectedFile(fileInput.files[0] || null);
   });
