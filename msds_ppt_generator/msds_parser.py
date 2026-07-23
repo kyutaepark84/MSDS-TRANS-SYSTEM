@@ -81,6 +81,8 @@ _BOILERPLATE_PATTERNS = [
     r"최종개정일자\s*[:：]\s*[\d.]+",
     r"본\s*물질안전보건자료는\s*산업안전보건법\s*및\s*시행규칙에\s*의거하여\s*작성",
     r"\S{1,20}\s+\d+\s*페이지\s*중\s*\d+\s*페이지\s*MSDS-\S+\s*\(rev\.\d+\)",
+    r"Page\s+\d+\s+of\b\s*\d*",
+    r"포함된\s*물질[^./]*있음\.?",
 ]
 
 # 자주 쓰이는 합금/용접재료 원소의 CAS 번호 -> 이름. 표 제목 등 잡음 단어가
@@ -113,11 +115,11 @@ ACCIDENTAL_RELEASE_LABELS = {
 }
 HANDLING_STORAGE_LABELS = {
     "handling": r"안전\s*취급\s*요령",
-    "storage": r"안전한\s*저장\s*방법",
+    "storage": r"안전한\s*저장\s*방법(?:\s*\([^)]*\))?",
 }
 PPE_LABELS = {
     "respiratory": r"호흡기\s*보호",
-    "eye": r"눈\s*/?\s*안면\s*보호",
+    "eye": r"눈\s*(?:/?\s*안면)?\s*보호",
     "hand": r"손\s*보호",
     "body": r"신체\s*보호",
 }
@@ -207,6 +209,11 @@ def _capture_after_label(text, label_pattern, max_chars=150):
     if not m:
         return ""
     rest = text[m.end():]
+    # 레이블 바로 뒤에 붙는 장식용 불릿("- ", "○ ")은 실제 경계가 아니라 그
+    # 뒤에 오는 내용 자체의 시작 표시이므로, 캡처 전에 먼저 벗겨낸다. 벗기지
+    # 않으면 아래 STOP 판정에서 이 불릿을 "거의 즉시 나온 마커"로 오인해
+    # 건너뛰면서, 그 과정에서 실제 내용의 첫 글자까지 함께 삼켜버리게 된다.
+    rest = re.sub(r"^\s*[-○]\s*", "", rest)
     # 첫 STOP 지점이 거의 즉시(빈 캡처 수준)라면 같은 항목의 하위번호
     # (예: "6.2. 환경보호 6.2.1. 대기 : ...")일 가능성이 높으므로 그 마커를
     # 건너뛰고(캡처 시작점도 함께 이동) 다음 STOP까지 계속 찾는다(최대 3회).
@@ -298,13 +305,13 @@ def _parse_classification(section2):
     pairs = []
     for m in re.finditer(r"([가-힣][가-힣0-9()\-/\s]{1,30}?)\s*[:：]?\s*구분\s*(\d+)", body):
         pairs.append((m.group(1).strip(), f"구분{m.group(2)}"))
-        if len(pairs) >= 8:
+        if len(pairs) >= 15:
             break
     return pairs
 
 
 def _parse_signal_word(section2):
-    m = re.search(r"신호어\s*[:：]?\s*(위험|경고)", section2)
+    m = re.search(r"신호어\s*[-:：]?\s*(위험|경고)", section2)
     return m.group(1) if m else ""
 
 
@@ -325,11 +332,17 @@ def _extract_coded_statements(text, code_re, max_chars=150):
         window = desc[:90]
         period_m = re.search(r"[.!?]", window)
         marker_m = re.search(
-            rf"(?:(?<![가-힣])[{_ORDINAL_CHARS}]\)|\d+\)|\d+(?:\.\d+)+|[HP]\d{{3}}|예방조치문구|응급조치요령)", window
+            rf"(?:(?<![가-힣])[{_ORDINAL_CHARS}]\)|\d+\)|\d+(?:\.\d+)+|[HP]\d{{3}}|예방조치문구|응급조치요령|○)", window
         )
         candidates = [c.end() if c is period_m else c.start() for c in (period_m, marker_m) if c]
         desc = window[:min(candidates)] if candidates else window
-        out.append((m.group(0), desc.strip(), m.start()))
+        desc = desc.strip()
+        # 일부 문서는 각 코드 항목 앞뒤로 "-" 를 장식용 불릿으로 쓰는데, 마침표
+        # 없이 바로 다음 코드로 이어지는 문장의 경우 그 다음 항목의 불릿("- ")까지
+        # 함께 캡처되어 끝에 하이픈만 덩그러니 남는 경우가 있어 마지막으로 한 번
+        # 더 정리한다.
+        desc = re.sub(r"\s*-\s*$", "", desc).strip()
+        out.append((m.group(0), desc, m.start()))
     return out
 
 
@@ -337,7 +350,7 @@ def _group_precaution_codes(section2, p_entries):
     group_labels = {"prevention": "예방", "response": "대응", "storage": "저장", "disposal": "폐기"}
     anchors = []
     for key, word in group_labels.items():
-        for m in re.finditer(rf"(?:[{_ORDINAL_CHARS}]\)|\d+(?:\.\d+)+\.?)\s*{word}\b", section2):
+        for m in re.finditer(rf"(?:[{_ORDINAL_CHARS}]\)|\d+\)|\d+(?:\.\d+)+\.?)\s*{word}\b", section2):
             anchors.append((m.start(), key))
     anchors.sort()
     result = {k: [] for k in group_labels}
@@ -366,25 +379,58 @@ def _parse_section2(section2):
 # 섹션 3: 구성성분
 # --------------------------------------------------------------------------
 
-def _parse_composition(section3):
+def _parse_composition(section3, product_name=""):
     section3 = re.sub(r"구성\s*성분의?\s*명칭\s*및\s*함유량", "", section3)
-    section3 = re.sub(r"화학\s*물질명|물질명|이명\s*\(관용명\)|이명", "", section3)
+    section3 = re.sub(r"화학\s*물질명|물질명|관용명(?:\s*및\s*이명)?|이명\s*\(관용명\)|이명", "", section3)
+    section3 = re.sub(r"CAS\s*번호(?:\s*또는\s*식별번호)?", "", section3)
+    section3 = re.sub(r"함유량\s*\(%\)", "", section3)
+    section3 = re.sub(r"단위\s*[:：]\s*\S+", "", section3)
+    # 영문 표기 문서는 "Cas No. / EU No. / KE No." 처럼 영문 표 헤더를 쓰기도
+    # 하는데, 이름을 영문도 허용하도록 넓힌 뒤로는 이 헤더 문구 자체가 이름으로
+    # 오인될 수 있어 미리 지운다.
+    section3 = re.sub(r"Cas\s*No\.?|EU\s*No\.?|KE\s*No\.?", "", section3, flags=re.IGNORECASE)
+    if product_name:
+        # 일부 문서는 표 머리말 부근에 제품명(코드)이 워터마크처럼 한 번 더
+        # 섞여 들어와 있어(예: "CAS 번호 NC-T30R 크롬 ..."), 본문에서 이미
+        # 확인된 제품명과 정확히 같은 문자열이 나오면 이름으로 오인하지 않도록
+        # 먼저 지운다.
+        section3 = re.sub(re.escape(product_name), "", section3)
     out = []
     cas_matches = list(_CAS_RE.finditer(section3))
+    prev_content_end = 0
     for i, m in enumerate(cas_matches):
-        before_start = cas_matches[i - 1].end() if i > 0 else 0
-        before = section3[max(before_start, m.start() - 40):m.start()]
-        name_m = re.search(r"[가-힣]+", before)
-        name = name_m.group(0) if name_m else ""
+        # 이름은 "직전 행의 함유량 끝"부터 "이번 CAS 시작"까지의 구간에서 찾는다
+        # (단순히 직전 CAS 뒤부터로 잡으면, 표 사이에 낀 "포함된 물질..." 같은
+        # 안내문이 함께 걸려 이름으로 오인될 여지가 남아있어 이쪽이 더 좁고 정확).
+        before_start = max(cas_matches[i - 1].end() if i > 0 else 0, prev_content_end)
+        before = section3[max(before_start, m.start() - 60):m.start()]
+        # 이름은 한글 단어일 수도(NC-T30R 등) 영문 화학명일 수도(휘발유 등) 있다.
+        # "관용명/이명" 칸이 바로 뒤에 붙어 있어도(예: "크롬 자료없음", "Ethylbenzene
+        # Benzene, ethyl-") 그건 제외하고 화학물질명 칸 하나만 가져와야 하므로,
+        # (공백으로 끝나는) 첫 번째 단어류 토큰만 취한다 — 표 안에서 가장 먼저
+        # 나오는 이름류 어구가 항상 화학물질명 칸이기 때문이다.
+        name_m = re.search(r"(?:\d+(?:,\d+)*-)?[A-Za-z가-힣][A-Za-z가-힣0-9\-]*", before)
+        name = name_m.group(0).strip() if name_m else ""
         if not name or name in _COMPOSITION_HEADER_NOISE:
             name = KNOWN_CAS_NAMES.get(m.group(0), name)
 
         after_end = cas_matches[i + 1].start() if i + 1 < len(cas_matches) else len(section3)
         after = section3[m.end():after_end]
-        eu_m = re.match(r"\s*\d+-\d+(?:-\d+)?/[A-Z]{1,4}-?\d*\s*", after)
-        search_area = after[eu_m.end():] if eu_m else after
+        # CAS 번호 뒤에는 "EU번호/식별번호"(예: "231-096-4/KE-21059")가 붙는
+        # 경우도, EU번호 없이 "/KE-21971"처럼 식별번호만 슬래시로 바로 붙는
+        # 경우도 있어 앞의 EU번호 부분은 있어도 되고 없어도 되게 한다.
+        identifier_m = re.match(r"\s*(?:\d+-\d+(?:-\d+)?)?/[A-Z]{1,4}-?\d*\s*", after)
+        search_area = after[identifier_m.end():] if identifier_m else after
         content_m = re.search(r"[<>]?\s*\d[\d.]*(?:\s*~\s*\d[\d.]*)?", search_area)
         content = re.sub(r"\s+", "", content_m.group(0)) if content_m else ""
+        content_offset = (identifier_m.end() if identifier_m else 0) + (content_m.end() if content_m else 0)
+        # 함유량 뒤에 영문 이명이 괄호로 바로 붙는 경우가 있다(예: "55~65 (Iron)").
+        # 그 괄호를 이번 행이 다 삼키고 지나가지 않으면, 다음 CAS의 이름 탐색
+        # 구간에 이 괄호가 섞여 들어가 다음 행의 이름으로 잘못 잡힐 수 있다.
+        paren_m = re.match(r"\s*\([^)]*\)", after[content_offset:])
+        if paren_m:
+            content_offset += paren_m.end()
+        prev_content_end = m.end() + content_offset
         if name and content:
             out.append((name, m.group(0), content))
     return out
@@ -446,6 +492,23 @@ def _parse_exposure_controls(section8):
 
 
 # --------------------------------------------------------------------------
+# 파일명 기반 제품명 추출
+# --------------------------------------------------------------------------
+
+_FILENAME_PRODUCT_RE = re.compile(r"MSDS\s*\(([^)]+)\)", re.IGNORECASE)
+
+
+def extract_product_name_from_filename(filename):
+    """업로드된 MSDS 파일명이 "...MSDS(제품명)..." 형식을 따르는 경우, 괄호
+    안의 제품명을 그대로 추출한다. 본문에서 뽑아낸 이름은 회사마다 표기가
+    제각각이라(예: "휘발유(Regular Gasoline)" 중 일부만 추출되는 등) 신뢰도가
+    떨어질 수 있는 반면, 파일명의 제품명은 사내에서 이미 정리해 놓은 표준
+    표기이므로 있으면 이쪽을 우선한다. 이 패턴이 아니면 빈 문자열을 돌려준다."""
+    m = _FILENAME_PRODUCT_RE.search(filename or "")
+    return m.group(1).strip() if m else ""
+
+
+# --------------------------------------------------------------------------
 # 진입점
 # --------------------------------------------------------------------------
 
@@ -466,7 +529,7 @@ def parse_msds(pdf_path):
     data.hazard_statements = hazard_statements
     data.precaution = precaution
 
-    data.composition = _parse_composition(sections.get(3, ""))
+    data.composition = _parse_composition(sections.get(3, ""), product_name=data.product_name)
     data.first_aid = _parse_first_aid(sections.get(4, ""))
     data.firefighting = _parse_firefighting(sections.get(5, ""))
     data.accidental_release = _parse_accidental_release(sections.get(6, ""))

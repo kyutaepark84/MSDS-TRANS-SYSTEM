@@ -19,6 +19,10 @@ const MAX_PREVENTION_ITEMS = 8;
 const MAX_HANDLING_BULLETS = 4;
 const MAX_HAZARD_BULLETS = 8;
 const MAX_PICTOGRAMS_WEB = 3;
+// 관리요령 템플릿(handling_template.pptx)의 실제 슬라이드 높이(EMU). 표의
+// 실제 높이가 이보다 조금 더 커서 맨 아래 행 일부가 인쇄 가능 영역을
+// 벗어나 있어, 표를 위로 살짝 올려 보정하는 데 사용한다.
+const HANDLING_SLIDE_HEIGHT_EMU = 9906000;
 
 const LABEL_PICTURE_SLOTS = [
   { name: "Picture 9", mediaPath: "ppt/media/image3.png" },
@@ -381,11 +385,24 @@ async function buildLabelSlide(msds) {
 // 템플릿 B: 관리요령
 // --------------------------------------------------------------------------
 
+// 서로 다른 레이블에서 뽑아낸 문장 조각들을 하나로 이어붙일 때, 앞 조각이
+// 마침표 등으로 끝나지 않으면 그냥 공백만 넣어 이어붙이지 않고 마침표를
+// 넣어 두 문장이 붙어 읽히지 않게 한다.
+function joinFragments(parts) {
+  let out = "";
+  for (const p of parts.filter(Boolean)) {
+    if (out && !/[.!?]$/.test(out)) out += ". ";
+    else if (out) out += " ";
+    out += p;
+  }
+  return out;
+}
+
 function accidentResponseBullets(msds) {
   const lines = [];
-  const fire = [msds.firefighting.extinguishing, msds.firefighting.protective].filter(Boolean).join(" ");
+  const fire = joinFragments([msds.firefighting.extinguishing, msds.firefighting.protective]);
   if (fire) lines.push(`- 화재 시 ${fire}`);
-  const leak = [msds.accidentalRelease.personal, msds.accidentalRelease.environmental].filter(Boolean).join(" ");
+  const leak = joinFragments([msds.accidentalRelease.personal, msds.accidentalRelease.environmental]);
   if (leak) lines.push(`- 누출 시 ${leak}`);
   return lines;
 }
@@ -422,6 +439,20 @@ async function buildHandlingSlide(msds) {
   const tbl = firstEl(tableShape, NS.a, "tbl");
   const rows = allEls(tbl, NS.a, "tr");
   const cellsOf = (rowIdx) => allEls(rows[rowIdx], NS.a, "tc");
+
+  // 템플릿 표의 실제 높이가 슬라이드 높이보다 조금 더 커서, 맨 아래 행
+  // ("※ 기타 자세한 내용은...") 일부가 인쇄 가능 영역을 벗어나 있다. 표는
+  // 이미 위쪽 테두리를 가리려고 top을 음수로 잡아둔 상태라, 그만큼 더 위로
+  // 올려도 보이는 내용에는 영향이 없어 이 방식으로 넘치는 만큼 보정한다.
+  const tblOff0 = firstEl(tableShape, NS.p, "xfrm");
+  const off0 = firstEl(tblOff0, NS.a, "off");
+  const ext0 = firstEl(tblOff0, NS.a, "ext");
+  const tableTop0 = parseInt(off0.getAttribute("y"), 10);
+  const tableHeight0 = parseInt(ext0.getAttribute("cy"), 10);
+  const overflow0 = tableTop0 + tableHeight0 - HANDLING_SLIDE_HEIGHT_EMU;
+  if (overflow0 > 0) {
+    off0.setAttribute("y", String(tableTop0 - overflow0));
+  }
 
   setParagraphText(firstEl(firstEl(cellsOf(0)[0], NS.a, "txBody"), NS.a, "p"), msds.productName);
 

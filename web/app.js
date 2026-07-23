@@ -81,11 +81,11 @@ function todayYmd() {
 }
 
 function buildFilenames(productName, seq, revDate) {
-  const prefix = seq ? `${seq}.` : "";
+  const prefix = seq ? `${seq}. ` : "";
   const product = safeFilenamePart(productName) || "제품명";
   return {
-    label: `${prefix}현장경고표지_${product}_rev.${revDate}.pptx`,
-    handling: `${prefix}관리요령_${product}_rev.${revDate}.pptx`,
+    label: `${prefix}현장경고표지(${product})_REV.${revDate}.pptx`,
+    handling: `${prefix}관리요령(${product})_REV.${revDate}.pptx`,
   };
 }
 
@@ -124,7 +124,7 @@ async function handleGenerate() {
     const pages = await extractPagesText(arrayBuffer);
 
     setStatus("MSDS 내용을 분석하는 중…");
-    const msds = parseMsds(pages);
+    const msds = parseMsds(pages, file.name);
 
     if (!msds.productName) {
       setStatus("경고: 제품명을 추출하지 못했습니다. MSDS 서식이 예상과 다를 수 있습니다. 계속 진행합니다…", true);

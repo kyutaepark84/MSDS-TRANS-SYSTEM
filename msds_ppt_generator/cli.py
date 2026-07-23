@@ -10,7 +10,7 @@ import os
 import re
 import sys
 
-from .msds_parser import parse_msds
+from .msds_parser import parse_msds, extract_product_name_from_filename
 from .ppt_builder import build_label_slide, build_handling_slide
 
 
@@ -19,10 +19,10 @@ def _safe_filename_part(text):
 
 
 def build_filenames(product_name, seq, rev_date):
-    prefix = f"{seq}." if seq else ""
+    prefix = f"{seq}. " if seq else ""
     product = _safe_filename_part(product_name) or "제품명"
-    label_name = f"{prefix}현장경고표지_{product}_rev.{rev_date}.pptx"
-    handling_name = f"{prefix}관리요령_{product}_rev.{rev_date}.pptx"
+    label_name = f"{prefix}현장경고표지({product})_REV.{rev_date}.pptx"
+    handling_name = f"{prefix}관리요령({product})_REV.{rev_date}.pptx"
     return label_name, handling_name
 
 
@@ -39,6 +39,9 @@ def main(argv=None):
     rev_date = args.rev_date or datetime.date.today().strftime("%Y.%m.%d")
 
     msds = parse_msds(args.pdf_path)
+    filename_product = extract_product_name_from_filename(os.path.basename(args.pdf_path))
+    if filename_product:
+        msds.product_name = filename_product
     if not msds.product_name:
         print("경고: 제품명을 추출하지 못했습니다. MSDS 서식이 예상과 다를 수 있습니다.", file=sys.stderr)
 

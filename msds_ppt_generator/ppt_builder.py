@@ -331,12 +331,27 @@ def build_label_slide(msds, out_path, template_path=LABEL_TEMPLATE):
 # 템플릿 B: 관리요령
 # --------------------------------------------------------------------------
 
+def _join_fragments(parts):
+    """서로 다른 레이블에서 뽑아낸 문장 조각들을 하나로 이어붙일 때, 앞
+    조각이 마침표 등으로 끝나지 않으면 그냥 공백만 넣어 이어붙이지 않고
+    마침표를 넣어 두 문장이 붙어 읽히지 않게 한다."""
+    parts = [p for p in parts if p]
+    out = ""
+    for p in parts:
+        if out and not out.endswith((".", "!", "?")):
+            out += ". "
+        elif out:
+            out += " "
+        out += p
+    return out
+
+
 def _accident_response_bullets(msds):
     lines = []
-    fire = " ".join(filter(None, [msds.firefighting.get("extinguishing"), msds.firefighting.get("protective")]))
+    fire = _join_fragments([msds.firefighting.get("extinguishing"), msds.firefighting.get("protective")])
     if fire:
         lines.append(f"- 화재 시 {fire}")
-    leak = " ".join(filter(None, [msds.accidental_release.get("personal"), msds.accidental_release.get("environmental")]))
+    leak = _join_fragments([msds.accidental_release.get("personal"), msds.accidental_release.get("environmental")])
     if leak:
         lines.append(f"- 누출 시 {leak}")
     return lines
@@ -374,6 +389,14 @@ def build_handling_slide(msds, out_path, template_path=HANDLING_TEMPLATE):
 
     table_shape = next(s for s in slide.shapes if s.has_table)
     tbl = table_shape.table
+
+    # 템플릿 표의 실제 높이가 슬라이드 높이보다 조금 더 커서, 맨 아래 행
+    # ("※ 기타 자세한 내용은...") 일부가 인쇄 가능 영역을 벗어나 있다. 표는
+    # 이미 위쪽 테두리를 가리려고 top을 음수로 잡아둔 상태라, 그만큼 더
+    # 위로 올려도 보이는 내용에는 영향이 없어 이 방식으로 넘치는 만큼 보정한다.
+    overflow = (table_shape.top + table_shape.height) - prs.slide_height
+    if overflow > 0:
+        table_shape.top -= overflow
 
     _set_paragraph_text(tbl.cell(0, 0).text_frame._txBody.find(qn("a:p")), msds.product_name)
 
