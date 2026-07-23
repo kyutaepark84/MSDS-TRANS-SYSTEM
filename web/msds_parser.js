@@ -148,7 +148,7 @@ function splitSections(flatText) {
 // 레이블 뒤 텍스트 캡처 공용 유틸
 // --------------------------------------------------------------------------
 
-function captureAfterLabel(text, labelPattern, maxChars = 150) {
+function captureAfterLabel(text, labelPattern, maxChars = 150, extraStop = null) {
   const m = new RegExp(`${labelPattern}\\s*[:：]?\\s*`).exec(text);
   if (!m) return "";
   let rest = text.slice(m.index + m[0].length);
@@ -163,7 +163,7 @@ function captureAfterLabel(text, labelPattern, maxChars = 150) {
   let searchFrom = 0;
   let contentStart = 0;
   let end = rest.length;
-  const stopRe = new RegExp(_STOP_MATCH_SRC);
+  const stopRe = new RegExp(extraStop ? `${_STOP_MATCH_SRC}|${extraStop}` : _STOP_MATCH_SRC);
   for (let i = 0; i < 3; i++) {
     const stopM = stopRe.exec(rest.slice(searchFrom));
     if (!stopM) {
@@ -205,16 +205,34 @@ function parseProductName(section1) {
   const m = /제품명\s*[:：]?\s*/.exec(section1);
   if (!m) return "";
   const window_ = section1.slice(m.index + m[0].length, m.index + m[0].length + 60);
-  const codeM = /^[A-Za-z][A-Za-z0-9\-]{1,19}/.exec(window_);
-  if (codeM) return codeM[0];
   const stopM = STOP.exec(window_);
   const captured = (stopM ? window_.slice(0, stopM.index) : window_).trim();
-  const codeM2 = /[A-Za-z][A-Za-z0-9\-]{1,19}/.exec(captured);
-  if (codeM2 && captured.length > codeM2[0].length + 10) return codeM2[0];
+
+  const codeM = /^[A-Za-z][A-Za-z0-9\-]{1,19}/.exec(window_);
+  if (codeM) {
+    // 코드 바로 뒤에 다음 항목(STOP)이 거의 바로 이어지면(공백만 있고 그
+    // 뒤가 바로 "1.2." 같은 다음 항목이면), 이 코드 자체가 제품명 전체다
+    // (예: "ST-309\n1.1.1. 제품에 대한 기술 : ..."). 코드 뒤에 괄호나
+    // 단어가 더 이어지면 그 코드는 제품명의 시작일 뿐이므로(예: "PN02994
+    // (L/C) Green corps cut-off wheel"), 뒤에 이어지는 내용까지 포함해서
+    // 캡처한다.
+    const gapM = /^\s*/.exec(window_.slice(codeM[0].length));
+    if (stopM && codeM[0].length + gapM[0].length >= stopM.index) {
+      return codeM[0];
+    }
+  } else {
+    const codeM2 = /[A-Za-z][A-Za-z0-9\-]{1,19}/.exec(captured);
+    if (codeM2 && captured.length > codeM2[0].length + 10) return codeM2[0];
+  }
   return captured;
 }
 
-const _PHONE_RE = /\d{2,4}[-–]\d{3,4}[-–]\d{4}/;
+// 국가번호가 앞에 붙어 4개 조각으로 쓰이는 경우(예: "82-2-3771-4114",
+// "82-80-033-4114")와 국내 표기 3개 조각(예: "02-2121-5114")을 모두 포괄
+// 하도록, 조각 개수(2~3개의 하이픈)와 각 조각 자릿수(1~4자리)를 넉넉하게
+// 잡는다. 너무 좁은 조각 수 고정(예: 정확히 3개 조각만 허용)은 국가번호가
+// 붙은 4개 조각 번호에서 앞부분을 잘라먹는 문제를 일으켰다.
+const _PHONE_RE = /\d{1,4}(?:[-–]\d{1,4}){2,3}/;
 
 function parseSupplierPhone(section1) {
   for (const label of ["긴급\\s*전화\\s*번호", "긴급연락\\s*전화", "긴급\\s*연락처", "TEL"]) {
@@ -226,17 +244,27 @@ function parseSupplierPhone(section1) {
   return m ? m[0] : "";
 }
 
+// 공급자 정보(1.3)는 "회사명:/주소:/전화:/팩스:/웹사이트/긴급전화번호:" 처럼
+// 레이블이 붙은 필드가 한 줄씩 이어지는 문서가 있다. 이런 필드 레이블은
+// STOP(번호/불릿) 판정에 걸리지 않아, 그대로 두면 다음 필드 레이블까지
+// 통째로 삼켜버린다(예: 회사명이 "한국쓰리엠 주소: 서울특별시 ... 전화: ...
+// 긴급전화번호: ..." 전체가 되어버림). 그래서 이 필드들을 캡처할 때는 서로를
+// 추가 경계로 함께 써서 다음 레이블 앞에서 멈추도록 한다.
+const _SUPPLIER_FIELD_STOP =
+  "회사명\\s*[:：]|주\\s*소\\s*[:：]|전화\\s*(?:번호)?\\s*[:：]|팩스\\s*(?:번호)?\\s*[:：]|" +
+  "웹\\s*사이트|홈페이지|e-?mail\\s*[:：]|긴급\\s*(?:연락\\s*)?(?:전화|연락처)\\s*(?:번호)?\\s*[:：]?";
+
 function parseSection1(section1) {
   const name = parseProductName(section1);
   let supplierName = "";
   for (const label of ["제조자\\s*정보", "회사명"]) {
-    const val = captureAfterLabel(section1, label);
+    const val = captureAfterLabel(section1, label, 150, _SUPPLIER_FIELD_STOP);
     if (val) {
       supplierName = val;
       break;
     }
   }
-  const supplierAddress = captureAfterLabel(section1, "주\\s*소", 120);
+  const supplierAddress = captureAfterLabel(section1, "주\\s*소", 120, _SUPPLIER_FIELD_STOP);
   const supplierPhone = parseSupplierPhone(section1);
   return { name, supplierName, supplierAddress, supplierPhone };
 }
@@ -337,9 +365,21 @@ function parseSection2(section2) {
 
 function parseComposition(section3, productName = "") {
   section3 = section3.replace(/구성\s*성분의?\s*명칭\s*및\s*함유량/g, "");
+  // "이 제품의 물질은 혼합물로 구성"류 안내문(단일물질인 경우 "단일 화학물질로
+  // 구성"으로도 쓰임)은 표 앞에 붙는 상투어라, 지우지 않으면 첫 행의 이름
+  // 탐색 구간에 걸려 "이"처럼 엉뚱한 글자가 이름으로 잡힌다.
+  section3 = section3.replace(/이\s*제품의?\s*물질은\s*(?:단일\s*화학\s*물질로|혼합물로)\s*구성(?:됨|되어\s*있음)?\.?/g, "");
   section3 = section3.replace(/화학\s*물질명|물질명|관용명(?:\s*및\s*이명)?|이명\s*\(관용명\)|이명/g, "");
-  section3 = section3.replace(/CAS\s*번호(?:\s*또는\s*식별번호)?/g, "");
-  section3 = section3.replace(/함유량\s*\(%\)/g, "");
+  // "CAS번호"와 "또는 식별번호"를 하나로 묶어서 지우면, 표 헤더가 두 줄로
+  // 나뉘어 추출되는 문서(예: "CAS번호 또는 식별번" 다음 줄에 "호"만 떨어져
+  // 나옴)에서 그 사이에 낀 "함유량 (%)" 때문에 통짜 매칭이 실패해 헤더
+  // 잔여 글자가 이름으로 오인될 수 있다. 그래서 각각 따로 지운다.
+  section3 = section3.replace(/CAS\s*번호/g, "");
+  section3 = section3.replace(/또는\s*식별\s*번\s*호?/g, "");
+  // "식별번호"가 줄바꿈으로 "식별번"과 "호"로 쪼개져 추출되면, 떨어져 나간
+  // "호" 한 글자가 열 순서상 "함유량 (%)" 바로 뒤에 붙어서 나온다. 위에서
+  // 못 지운 그 "호"를 여기서 마저 지운다(안 지우면 다음 성분명으로 오인됨).
+  section3 = section3.replace(/함유량\s*\(%\)\s*호?/g, "");
   section3 = section3.replace(/단위\s*[:：]\s*\S+/g, "");
   // 영문 표기 문서는 "Cas No. / EU No. / KE No." 처럼 영문 표 헤더를 쓰기도
   // 하는데, 이름을 영문도 허용하도록 넓힌 뒤로는 이 헤더 문구 자체가 이름으로
@@ -383,7 +423,9 @@ function parseComposition(section3, productName = "") {
     // 경우도 있어 앞의 EU번호 부분은 있어도 되고 없어도 되게 한다.
     const identifierM = /^\s*(?:\d+-\d+(?:-\d+)?)?\/[A-Z]{1,4}-?\d*\s*/.exec(after);
     const searchArea = identifierM ? after.slice(identifierM[0].length) : after;
-    const contentM = /[<>]?\s*\d[\d.]*(?:\s*~\s*\d[\d.]*)?/.exec(searchArea);
+    // 함유량 구간(범위) 표기는 "~"(예: "10~30")를 쓰는 문서도, "-"(예: "60 - 70")를
+    // 쓰는 문서도 있어 둘 다 구간 구분자로 인정한다.
+    const contentM = /[<>]?\s*\d[\d.]*(?:\s*[~\-]\s*\d[\d.]*)?/.exec(searchArea);
     const content = contentM ? contentM[0].replace(/\s+/g, "") : "";
     let contentOffset = (identifierM ? identifierM[0].length : 0) + (contentM ? contentM.index + contentM[0].length : 0);
     // 함유량 뒤에 영문 이명이 괄호로 바로 붙는 경우가 있다(예: "55~65 (Iron)").
@@ -391,6 +433,14 @@ function parseComposition(section3, productName = "") {
     // 구간에 이 괄호가 섞여 들어가 다음 행의 이름으로 잘못 잡힐 수 있다.
     const parenM = /^\s*\([^)]*\)/.exec(after.slice(contentOffset));
     if (parenM) contentOffset += parenM[0].length;
+    // 관용명(영문 합성명)이 표 셀 안에서 줄바꿈되면, 그 뒷부분이 이번 행의
+    // CAS·함유량 뒤로 밀려나 다음 행 앞에 낀 채로 추출된다(예: "ACTIVATED
+    // ALUMINUM"이 한 줄, "OXIDE"가 다음 줄인 셀은 "... 60-70 OXIDE
+    // Sodium Aluminum ..." 순서로 나옴). 관용명은 보통 영문 대문자로 쓰이므로,
+    // 함유량 뒤에 곧바로 오는 대문자 전용 단어(들)는 이번 행의 잔여 관용명으로
+    // 보고 먼저 소비해, 다음 행 이름 탐색 구간에 섞여 들어가지 않게 한다.
+    const capsM = /^\s*(?:[A-Z][A-Z.\-]{1,}(?:\s+|$)){1,3}/.exec(after.slice(contentOffset));
+    if (capsM) contentOffset += capsM[0].length;
     prevContentEnd = m.index + m[0].length + contentOffset;
 
     if (name && content) out.push([name, m[0], content]);

@@ -179,19 +179,22 @@ _LINE_HEIGHT_FACTOR = 1.2
 PICTOGRAM_GAP_EMU = 50000
 
 
-def _fit_label_composition_size(n_rows, t_ins, b_ins, top_gap_emu, max_height_emu):
+def _fit_label_composition_size(n_rows, t_ins, b_ins, top_gap_emu, max_height_emu, title_lines=1):
     """제목(36pt 고정) + 성분 목록이 상자 높이 안에 들어가도록 성분 목록
     글자 크기와 상자에 필요한 높이를 정한다. 상자는 세로 가운데 정렬(anchor=ctr)
     이라 내용이 길어지면 위/아래로 넘쳐 인쇄 서식 경계(제목 위쪽 테두리, 그림문자
     영역)를 넘어갈 수 있어, 성분 목록 글자 크기부터 줄이고 그래도 안 맞으면
-    상자 높이를(그림문자와 겹치지 않는 한도까지) 늘린다."""
+    상자 높이를(그림문자와 겹치지 않는 한도까지) 늘린다. 제품명이 길어 제목이
+    여러 줄로 줄바꿈되는 경우, title_lines로 그 줄 수를 반영해야 높이 계산이
+    맞다(1줄로 가정하면 실제로 2줄 이상 넘칠 때 다시 테두리를 침범한다)."""
+    title_height_factor = TITLE_FIXED_FONT_PT * title_lines
     for content_pt in range(COMPOSITION_MAX_FONT_PT, COMPOSITION_MIN_FONT_PT - 1, -1):
-        needed = (_LINE_HEIGHT_FACTOR * (TITLE_FIXED_FONT_PT + content_pt * n_rows) * EMU_PER_PT
+        needed = (_LINE_HEIGHT_FACTOR * (title_height_factor + content_pt * n_rows) * EMU_PER_PT
                   + t_ins + b_ins + 2 * top_gap_emu)
         if needed <= max_height_emu:
             return content_pt, needed
     content_pt = COMPOSITION_MIN_FONT_PT
-    needed = (_LINE_HEIGHT_FACTOR * (TITLE_FIXED_FONT_PT + content_pt * n_rows) * EMU_PER_PT
+    needed = (_LINE_HEIGHT_FACTOR * (title_height_factor + content_pt * n_rows) * EMU_PER_PT
               + t_ins + b_ins + 2 * top_gap_emu)
     return content_pt, min(needed, max_height_emu)
 
@@ -327,6 +330,8 @@ def build_label_slide(msds, out_path, template_path=LABEL_TEMPLATE):
     bodyPr14 = txBody.find(qn("a:bodyPr"))
     t_ins14 = int(bodyPr14.get("tIns", "45720"))
     b_ins14 = int(bodyPr14.get("bIns", "45720"))
+    l_ins14 = int(bodyPr14.get("lIns", "90000"))
+    r_ins14 = int(bodyPr14.get("rIns", "90000"))
     outline = shapes.get("Rectangle 2")
     top_gap_emu = max(0, outline.top - rect14.top - t_ins14) if outline is not None else 0
     pic_tops = [s.top for s in slide.shapes if s.shape_type == MSO_SHAPE_TYPE.PICTURE]
@@ -335,8 +340,14 @@ def build_label_slide(msds, out_path, template_path=LABEL_TEMPLATE):
         max_height = max(rect14.height, max_bottom - rect14.top)
     else:
         max_height = rect14.height
+    # 제품명이 길면(특히 영문 제품명) 36pt 고정 폭에 한 줄로 안 들어가 줄바꿈될
+    # 수 있다. 1줄로 가정하고 높이를 계산하면 실제로 2줄 이상이 될 때 다시
+    # 테두리를 침범하므로, 줄바꿈 예상 줄 수를 미리 추정해 반영한다.
+    title_usable_width = rect14.width - l_ins14 - r_ins14
+    title_width = _estimate_text_width_emu(msds.product_name, TITLE_FIXED_FONT_PT)
+    title_lines = max(1, -(-title_width // title_usable_width)) if title_usable_width > 0 else 1
     content_pt, required_height = _fit_label_composition_size(
-        len(msds.composition), t_ins14, b_ins14, top_gap_emu, max_height
+        len(msds.composition), t_ins14, b_ins14, top_gap_emu, max_height, title_lines=title_lines
     )
     if required_height > rect14.height:
         rect14.height = int(required_height)

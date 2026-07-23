@@ -204,7 +204,7 @@ def split_sections(flat_text):
 # 레이블 뒤 텍스트 캡처 공용 유틸
 # --------------------------------------------------------------------------
 
-def _capture_after_label(text, label_pattern, max_chars=150):
+def _capture_after_label(text, label_pattern, max_chars=150, extra_stop=None):
     m = re.search(rf"{label_pattern}\s*[:：]?\s*", text)
     if not m:
         return ""
@@ -214,6 +214,7 @@ def _capture_after_label(text, label_pattern, max_chars=150):
     # 않으면 아래 STOP 판정에서 이 불릿을 "거의 즉시 나온 마커"로 오인해
     # 건너뛰면서, 그 과정에서 실제 내용의 첫 글자까지 함께 삼켜버리게 된다.
     rest = re.sub(r"^\s*[-○]\s*", "", rest)
+    stop_pattern = _STOP_MATCH if not extra_stop else rf"{_STOP_MATCH}|{extra_stop}"
     # 첫 STOP 지점이 거의 즉시(빈 캡처 수준)라면 같은 항목의 하위번호
     # (예: "6.2. 환경보호 6.2.1. 대기 : ...")일 가능성이 높으므로 그 마커를
     # 건너뛰고(캡처 시작점도 함께 이동) 다음 STOP까지 계속 찾는다(최대 3회).
@@ -221,7 +222,7 @@ def _capture_after_label(text, label_pattern, max_chars=150):
     content_start = 0
     end = len(rest)
     for _ in range(3):
-        stop_m = re.search(_STOP_MATCH, rest[search_from:])
+        stop_m = re.search(stop_pattern, rest[search_from:])
         if not stop_m:
             end = len(rest)
             break
@@ -259,18 +260,33 @@ def _parse_product_name(section1):
     if not m:
         return ""
     window = section1[m.end():m.end() + 60]
-    code_m = re.match(r"[A-Za-z][A-Za-z0-9\-]{1,19}", window)
-    if code_m:
-        return code_m.group(0)
     stop_m = re.search(STOP, window)
     captured = (window[:stop_m.start()] if stop_m else window).strip()
-    code_m2 = re.search(r"[A-Za-z][A-Za-z0-9\-]{1,19}", captured)
-    if code_m2 and len(captured) > len(code_m2.group(0)) + 10:
-        return code_m2.group(0)
+
+    code_m = re.match(r"[A-Za-z][A-Za-z0-9\-]{1,19}", window)
+    if code_m:
+        # 코드 바로 뒤에 다음 항목(STOP)이 거의 바로 이어지면(공백만 있고 그
+        # 뒤가 바로 "1.2." 같은 다음 항목이면), 이 코드 자체가 제품명 전체다
+        # (예: "ST-309\n1.1.1. 제품에 대한 기술 : ..."). 코드 뒤에 괄호나
+        # 단어가 더 이어지면 그 코드는 제품명의 시작일 뿐이므로(예: "PN02994
+        # (L/C) Green corps cut-off wheel"), 뒤에 이어지는 내용까지 포함해서
+        # 캡처한다.
+        gap_m = re.match(r"\s*", window[code_m.end():])
+        if stop_m and code_m.end() + gap_m.end() >= stop_m.start():
+            return code_m.group(0)
+    else:
+        code_m2 = re.search(r"[A-Za-z][A-Za-z0-9\-]{1,19}", captured)
+        if code_m2 and len(captured) > len(code_m2.group(0)) + 10:
+            return code_m2.group(0)
     return captured
 
 
-_PHONE_RE = re.compile(r"\d{2,4}[-–]\d{3,4}[-–]\d{4}")
+# 국가번호가 앞에 붙어 4개 조각으로 쓰이는 경우(예: "82-2-3771-4114",
+# "82-80-033-4114")와 국내 표기 3개 조각(예: "02-2121-5114")을 모두 포괄
+# 하도록, 조각 개수(2~3개의 하이픈)와 각 조각 자릿수(1~4자리)를 넉넉하게
+# 잡는다. 너무 좁은 조각 수 고정(예: 정확히 3개 조각만 허용)은 국가번호가
+# 붙은 4개 조각 번호에서 앞부분을 잘라먹는 문제를 일으켰다.
+_PHONE_RE = re.compile(r"\d{1,4}(?:[-–]\d{1,4}){2,3}")
 
 
 def _parse_supplier_phone(section1):
@@ -283,15 +299,27 @@ def _parse_supplier_phone(section1):
     return m.group(0) if m else ""
 
 
+# 공급자 정보(1.3)는 "회사명:/주소:/전화:/팩스:/웹사이트/긴급전화번호:" 처럼
+# 레이블이 붙은 필드가 한 줄씩 이어지는 문서가 있다. 이런 필드 레이블은
+# STOP(번호/불릿) 판정에 걸리지 않아, 그대로 두면 다음 필드 레이블까지
+# 통째로 삼켜버린다(예: 회사명이 "한국쓰리엠 주소: 서울특별시 ... 전화: ...
+# 긴급전화번호: ..." 전체가 되어버림). 그래서 이 필드들을 캡처할 때는 서로를
+# 추가 경계로 함께 써서 다음 레이블 앞에서 멈추도록 한다.
+_SUPPLIER_FIELD_STOP = (
+    r"회사명\s*[:：]|주\s*소\s*[:：]|전화\s*(?:번호)?\s*[:：]|팩스\s*(?:번호)?\s*[:：]|"
+    r"웹\s*사이트|홈페이지|e-?mail\s*[:：]|긴급\s*(?:연락\s*)?(?:전화|연락처)\s*(?:번호)?\s*[:：]?"
+)
+
+
 def _parse_section1(section1):
     name = _parse_product_name(section1)
     supplier_name = ""
     for label in (r"제조자\s*정보", r"회사명"):
-        val = _capture_after_label(section1, label)
+        val = _capture_after_label(section1, label, extra_stop=_SUPPLIER_FIELD_STOP)
         if val:
             supplier_name = val
             break
-    supplier_address = _capture_after_label(section1, r"주\s*소", max_chars=120)
+    supplier_address = _capture_after_label(section1, r"주\s*소", max_chars=120, extra_stop=_SUPPLIER_FIELD_STOP)
     supplier_phone = _parse_supplier_phone(section1)
     return name, supplier_name, supplier_address, supplier_phone
 
@@ -381,9 +409,21 @@ def _parse_section2(section2):
 
 def _parse_composition(section3, product_name=""):
     section3 = re.sub(r"구성\s*성분의?\s*명칭\s*및\s*함유량", "", section3)
+    # "이 제품의 물질은 혼합물로 구성"류 안내문(단일물질인 경우 "단일 화학물질로
+    # 구성"으로도 쓰임)은 표 앞에 붙는 상투어라, 지우지 않으면 첫 행의 이름
+    # 탐색 구간에 걸려 "이"처럼 엉뚱한 글자가 이름으로 잡힌다.
+    section3 = re.sub(r"이\s*제품의?\s*물질은\s*(?:단일\s*화학\s*물질로|혼합물로)\s*구성(?:됨|되어\s*있음)?\.?", "", section3)
     section3 = re.sub(r"화학\s*물질명|물질명|관용명(?:\s*및\s*이명)?|이명\s*\(관용명\)|이명", "", section3)
-    section3 = re.sub(r"CAS\s*번호(?:\s*또는\s*식별번호)?", "", section3)
-    section3 = re.sub(r"함유량\s*\(%\)", "", section3)
+    # "CAS번호"와 "또는 식별번호"를 하나로 묶어서 지우면, 표 헤더가 두 줄로
+    # 나뉘어 추출되는 문서(예: "CAS번호 또는 식별번" 다음 줄에 "호"만 떨어져
+    # 나옴)에서 그 사이에 낀 "함유량 (%)" 때문에 통짜 매칭이 실패해 헤더
+    # 잔여 글자가 이름으로 오인될 수 있다. 그래서 각각 따로 지운다.
+    section3 = re.sub(r"CAS\s*번호", "", section3)
+    section3 = re.sub(r"또는\s*식별\s*번\s*호?", "", section3)
+    # "식별번호"가 줄바꿈으로 "식별번"과 "호"로 쪼개져 추출되면, 떨어져 나간
+    # "호" 한 글자가 열 순서상 "함유량 (%)" 바로 뒤에 붙어서 나온다. 위에서
+    # 못 지운 그 "호"를 여기서 마저 지운다(안 지우면 다음 성분명으로 오인됨).
+    section3 = re.sub(r"함유량\s*\(%\)\s*호?", "", section3)
     section3 = re.sub(r"단위\s*[:：]\s*\S+", "", section3)
     # 영문 표기 문서는 "Cas No. / EU No. / KE No." 처럼 영문 표 헤더를 쓰기도
     # 하는데, 이름을 영문도 허용하도록 넓힌 뒤로는 이 헤더 문구 자체가 이름으로
@@ -421,7 +461,9 @@ def _parse_composition(section3, product_name=""):
         # 경우도 있어 앞의 EU번호 부분은 있어도 되고 없어도 되게 한다.
         identifier_m = re.match(r"\s*(?:\d+-\d+(?:-\d+)?)?/[A-Z]{1,4}-?\d*\s*", after)
         search_area = after[identifier_m.end():] if identifier_m else after
-        content_m = re.search(r"[<>]?\s*\d[\d.]*(?:\s*~\s*\d[\d.]*)?", search_area)
+        # 함유량 구간(범위) 표기는 "~"(예: "10~30")를 쓰는 문서도, "-"(예: "60 - 70")를
+        # 쓰는 문서도 있어 둘 다 구간 구분자로 인정한다.
+        content_m = re.search(r"[<>]?\s*\d[\d.]*(?:\s*[~\-]\s*\d[\d.]*)?", search_area)
         content = re.sub(r"\s+", "", content_m.group(0)) if content_m else ""
         content_offset = (identifier_m.end() if identifier_m else 0) + (content_m.end() if content_m else 0)
         # 함유량 뒤에 영문 이명이 괄호로 바로 붙는 경우가 있다(예: "55~65 (Iron)").
@@ -430,6 +472,15 @@ def _parse_composition(section3, product_name=""):
         paren_m = re.match(r"\s*\([^)]*\)", after[content_offset:])
         if paren_m:
             content_offset += paren_m.end()
+        # 관용명(영문 합성명)이 표 셀 안에서 줄바꿈되면, 그 뒷부분이 이번 행의
+        # CAS·함유량 뒤로 밀려나 다음 행 앞에 낀 채로 추출된다(예: "ACTIVATED
+        # ALUMINUM"이 한 줄, "OXIDE"가 다음 줄인 셀은 "... 60-70 OXIDE
+        # Sodium Aluminum ..." 순서로 나옴). 관용명은 보통 영문 대문자로 쓰이므로,
+        # 함유량 뒤에 곧바로 오는 대문자 전용 단어(들)는 이번 행의 잔여 관용명으로
+        # 보고 먼저 소비해, 다음 행 이름 탐색 구간에 섞여 들어가지 않게 한다.
+        caps_m = re.match(r"\s*(?:[A-Z][A-Z.\-]{1,}(?:\s+|$)){1,3}", after[content_offset:])
+        if caps_m:
+            content_offset += caps_m.end()
         prev_content_end = m.end() + content_offset
         if name and content:
             out.append((name, m.group(0), content))

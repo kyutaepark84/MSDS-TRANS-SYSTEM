@@ -239,14 +239,18 @@ function setFooterText(shapeEl, lines, sizePt, maxBottom = null) {
 // 이라 내용이 길어지면 위/아래로 넘쳐 인쇄 서식 경계(제목 위쪽 테두리, 그림문자
 // 영역)를 넘어갈 수 있어, 성분 목록 글자 크기부터 줄이고 그래도 안 맞으면
 // 상자 높이를(그림문자와 겹치지 않는 한도까지) 늘린다.
-function fitLabelCompositionSize(nRows, tIns, bIns, topGapEmu, maxHeightEmu) {
+// 제품명이 길면(특히 영문 제품명) 36pt 고정 폭에 한 줄로 안 들어가 줄바꿈될
+// 수 있다. 1줄로 가정하고 높이를 계산하면 실제로 2줄 이상이 될 때 다시
+// 테두리를 침범하므로, titleLines로 줄바꿈 예상 줄 수를 반영해야 한다.
+function fitLabelCompositionSize(nRows, tIns, bIns, topGapEmu, maxHeightEmu, titleLines = 1) {
+  const titleHeightFactor = TITLE_FIXED_FONT_PT * titleLines;
   for (let contentPt = COMPOSITION_MAX_FONT_PT; contentPt >= COMPOSITION_MIN_FONT_PT; contentPt--) {
-    const needed = LINE_HEIGHT_FACTOR * (TITLE_FIXED_FONT_PT + contentPt * nRows) * EMU_PER_PT
+    const needed = LINE_HEIGHT_FACTOR * (titleHeightFactor + contentPt * nRows) * EMU_PER_PT
       + tIns + bIns + 2 * topGapEmu;
     if (needed <= maxHeightEmu) return { contentPt, requiredHeight: needed };
   }
   const contentPt = COMPOSITION_MIN_FONT_PT;
-  const needed = LINE_HEIGHT_FACTOR * (TITLE_FIXED_FONT_PT + contentPt * nRows) * EMU_PER_PT
+  const needed = LINE_HEIGHT_FACTOR * (titleHeightFactor + contentPt * nRows) * EMU_PER_PT
     + tIns + bIns + 2 * topGapEmu;
   return { contentPt, requiredHeight: Math.min(needed, maxHeightEmu) };
 }
@@ -372,10 +376,13 @@ async function buildLabelSlide(msds) {
   const rect14Ext = shapeExt(rect14);
   const rect14Off = shapeOff(rect14);
   const rect14Height = parseInt(rect14Ext.getAttribute("cy"), 10);
+  const rect14Width = parseInt(rect14Ext.getAttribute("cx"), 10);
   const rect14Top = parseInt(rect14Off.getAttribute("y"), 10);
   const bodyPr14 = firstEl(txBody14, NS.a, "bodyPr");
   const tIns14 = parseInt(bodyPr14.getAttribute("tIns") || "45720", 10);
   const bIns14 = parseInt(bodyPr14.getAttribute("bIns") || "45720", 10);
+  const lIns14 = parseInt(bodyPr14.getAttribute("lIns") || "90000", 10);
+  const rIns14 = parseInt(bodyPr14.getAttribute("rIns") || "90000", 10);
   const outlineForTitle = findShapeByName(doc, "Rectangle 2");
   let topGapEmu = 0;
   if (outlineForTitle) {
@@ -392,8 +399,11 @@ async function buildLabelSlide(msds) {
     const maxBottomForTitle = Math.min(...picTops) - PICTOGRAM_GAP_EMU;
     maxHeight = Math.max(rect14Height, maxBottomForTitle - rect14Top);
   }
+  const titleUsableWidth = rect14Width - lIns14 - rIns14;
+  const titleWidth = estimateTextWidthEmu(msds.productName, TITLE_FIXED_FONT_PT);
+  const titleLines = titleUsableWidth > 0 ? Math.max(1, Math.ceil(titleWidth / titleUsableWidth)) : 1;
   const { contentPt, requiredHeight } = fitLabelCompositionSize(
-    msds.composition.length, tIns14, bIns14, topGapEmu, maxHeight
+    msds.composition.length, tIns14, bIns14, topGapEmu, maxHeight, titleLines
   );
   if (requiredHeight > rect14Height) {
     rect14Ext.setAttribute("cy", String(Math.round(requiredHeight)));
