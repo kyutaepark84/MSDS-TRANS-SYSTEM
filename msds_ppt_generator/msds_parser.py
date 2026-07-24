@@ -239,12 +239,18 @@ def _capture_after_label(text, label_pattern, max_chars=150, extra_stop=None):
 
 
 def _sentences(text, max_sentences=4, max_chars_each=90):
+    """문장 부호 기준으로 최대 max_sentences개까지만 취하고, 그 안에 포함된
+    문장은 절대 중간에서 잘라내지 않는다(내용이 길면 관리요령 쪽에서 표 행
+    높이/글자 크기를 조정해 온전히 보여준다). max_chars_each는 문장 부호가
+    전혀 없는 비정상적으로 긴 덩어리(예: 줄바꿈만 있고 마침표가 없는 문서)에
+    대한 안전장치로만 쓰이며, 이때도 "…"로 끊기보다 여유 있게 잡는다."""
     parts = re.split(r"(?<=[.!?])\s+", text.strip())
     parts = [p.strip() for p in parts if p.strip()]
     out = []
+    safety_cap = max(max_chars_each, 400)
     for p in parts[:max_sentences]:
-        if len(p) > max_chars_each:
-            p = p[:max_chars_each].rstrip() + "…"
+        if len(p) > safety_cap:
+            p = p[:safety_cap].rstrip()
         out.append(p)
     return out
 
@@ -624,8 +630,8 @@ def _parse_first_aid(section4):
         if not m:
             continue
         extra_stop = _labels_as_extra_stop(FIRST_AID_LABELS, exclude=key)
-        captured = _capture_after_label(section4, label, max_chars=200, extra_stop=extra_stop)
-        out[key] = {"label": m.group(0), "text": _first_sentences(captured)}
+        captured = _capture_after_label(section4, label, max_chars=350, extra_stop=extra_stop)
+        out[key] = {"label": m.group(0), "text": _first_sentences(captured, max_sentences=2, max_chars=220)}
     return out
 
 
@@ -643,8 +649,8 @@ def _parse_firefighting(section5):
             continue
         extra_stop = _labels_as_extra_stop(FIREFIGHTING_LABELS, exclude=key)
         extra_stop = f"{extra_stop}|{_FIREFIGHTING_EXTRA_STOP}" if extra_stop else _FIREFIGHTING_EXTRA_STOP
-        captured = _capture_after_label(section5, label, max_chars=150, extra_stop=extra_stop)
-        out[key] = _first_sentences(captured, max_sentences=1, max_chars=80)
+        captured = _capture_after_label(section5, label, max_chars=350, extra_stop=extra_stop)
+        out[key] = _first_sentences(captured, max_sentences=1, max_chars=220)
     return out
 
 
@@ -654,13 +660,13 @@ def _parse_accidental_release(section6):
         if not re.search(label, section6):
             continue
         extra_stop = _labels_as_extra_stop(ACCIDENTAL_RELEASE_LABELS, exclude=key)
-        captured = _capture_after_label(section6, label, max_chars=150, extra_stop=extra_stop)
+        captured = _capture_after_label(section6, label, max_chars=350, extra_stop=extra_stop)
         # "인체를 보호하기 위해 필요한 조치사항 및 보호구"처럼 레이블 자체가 두
         # 줄로 나뉜 문서는, 줄 순서상 레이블의 둘째 줄("및 보호구")이 값보다
         # 뒤에 붙어 나온다(예: "자료없음 및 보호구"). 값 뒤에 붙은 레이블
         # 잔여 문구를 떼어낸다.
         captured = re.sub(r"\s*및\s*보호구\s*$", "", captured)
-        out[key] = _first_sentences(captured, max_sentences=1, max_chars=80)
+        out[key] = _first_sentences(captured, max_sentences=1, max_chars=220)
     return out
 
 
@@ -670,8 +676,8 @@ def _parse_handling_storage(section7):
         if not re.search(label, section7):
             continue
         extra_stop = _labels_as_extra_stop(HANDLING_STORAGE_LABELS, exclude=key)
-        captured = _capture_after_label(section7, label, max_chars=400, extra_stop=extra_stop)
-        out[key] = _sentences(captured, max_sentences=4, max_chars_each=85)
+        captured = _capture_after_label(section7, label, max_chars=600, extra_stop=extra_stop)
+        out[key] = _sentences(captured, max_sentences=4, max_chars_each=200)
     return out
 
 
@@ -681,8 +687,8 @@ def _parse_exposure_controls(section8):
         if not re.search(label, section8):
             continue
         extra_stop = _labels_as_extra_stop(PPE_LABELS, exclude=key)
-        captured = _capture_after_label(section8, label, max_chars=200, extra_stop=extra_stop)
-        out[key] = _first_sentences(captured, max_sentences=1, max_chars=80)
+        captured = _capture_after_label(section8, label, max_chars=350, extra_stop=extra_stop)
+        out[key] = _first_sentences(captured, max_sentences=1, max_chars=220)
     return out
 
 

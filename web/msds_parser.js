@@ -184,12 +184,18 @@ function captureAfterLabel(text, labelPattern, maxChars = 150, extraStop = null)
   return rest.slice(contentStart, end).trim();
 }
 
+// 문장 부호 기준으로 최대 maxSentences개까지만 취하고, 그 안에 포함된 문장은
+// 절대 중간에서 잘라내지 않는다(내용이 길면 관리요령 쪽에서 표 행 높이/글자
+// 크기를 조정해 온전히 보여준다). maxCharsEach는 문장 부호가 전혀 없는
+// 비정상적으로 긴 덩어리에 대한 안전장치로만 쓰이며, 이때도 "…"로 끊기보다
+// 여유 있게 잡는다.
 function sentences(text, maxSentences = 4, maxCharsEach = 90) {
   const parts = text.trim().split(/(?<=[.!?])\s+/).map((s) => s.trim()).filter(Boolean);
   const out = [];
+  const safetyCap = Math.max(maxCharsEach, 400);
   for (const p0 of parts.slice(0, maxSentences)) {
     let p = p0;
-    if (p.length > maxCharsEach) p = p.slice(0, maxCharsEach).trimEnd() + "…";
+    if (p.length > safetyCap) p = p.slice(0, safetyCap).trimEnd();
     out.push(p);
   }
   return out;
@@ -596,8 +602,8 @@ function parseFirstAid(section4) {
     const m = new RegExp(label).exec(section4);
     if (!m) continue;
     const extraStop = labelsAsExtraStop(FIRST_AID_LABELS, key);
-    const captured = captureAfterLabel(section4, label, 200, extraStop);
-    out[key] = { label: m[0], text: firstSentences(captured) };
+    const captured = captureAfterLabel(section4, label, 350, extraStop);
+    out[key] = { label: m[0], text: firstSentences(captured, 2, 220) };
   }
   return out;
 }
@@ -614,8 +620,8 @@ function parseFirefighting(section5) {
     if (!new RegExp(label).test(section5)) continue;
     let extraStop = labelsAsExtraStop(FIREFIGHTING_LABELS, key);
     extraStop = extraStop ? `${extraStop}|${_FIREFIGHTING_EXTRA_STOP}` : _FIREFIGHTING_EXTRA_STOP;
-    const captured = captureAfterLabel(section5, label, 150, extraStop);
-    out[key] = firstSentences(captured, 1, 80);
+    const captured = captureAfterLabel(section5, label, 350, extraStop);
+    out[key] = firstSentences(captured, 1, 220);
   }
   return out;
 }
@@ -625,13 +631,13 @@ function parseAccidentalRelease(section6) {
   for (const [key, label] of Object.entries(ACCIDENTAL_RELEASE_LABELS)) {
     if (!new RegExp(label).test(section6)) continue;
     const extraStop = labelsAsExtraStop(ACCIDENTAL_RELEASE_LABELS, key);
-    let captured = captureAfterLabel(section6, label, 150, extraStop);
+    let captured = captureAfterLabel(section6, label, 350, extraStop);
     // "인체를 보호하기 위해 필요한 조치사항 및 보호구"처럼 레이블 자체가 두
     // 줄로 나뉜 문서는, 줄 순서상 레이블의 둘째 줄("및 보호구")이 값보다
     // 뒤에 붙어 나온다(예: "자료없음 및 보호구"). 값 뒤에 붙은 레이블
     // 잔여 문구를 떼어낸다.
     captured = captured.replace(/\s*및\s*보호구\s*$/, "");
-    out[key] = firstSentences(captured, 1, 80);
+    out[key] = firstSentences(captured, 1, 220);
   }
   return out;
 }
@@ -641,8 +647,8 @@ function parseHandlingStorage(section7) {
   for (const [key, label] of Object.entries(HANDLING_STORAGE_LABELS)) {
     if (!new RegExp(label).test(section7)) continue;
     const extraStop = labelsAsExtraStop(HANDLING_STORAGE_LABELS, key);
-    const captured = captureAfterLabel(section7, label, 400, extraStop);
-    out[key] = sentences(captured, 4, 85);
+    const captured = captureAfterLabel(section7, label, 600, extraStop);
+    out[key] = sentences(captured, 4, 200);
   }
   return out;
 }
@@ -652,8 +658,8 @@ function parseExposureControls(section8) {
   for (const [key, label] of Object.entries(PPE_LABELS)) {
     if (!new RegExp(label).test(section8)) continue;
     const extraStop = labelsAsExtraStop(PPE_LABELS, key);
-    const captured = captureAfterLabel(section8, label, 200, extraStop);
-    out[key] = firstSentences(captured, 1, 80);
+    const captured = captureAfterLabel(section8, label, 350, extraStop);
+    out[key] = firstSentences(captured, 1, 220);
   }
   return out;
 }

@@ -401,6 +401,47 @@ def build_label_slide(msds, out_path, template_path=LABEL_TEMPLATE):
 
 
 # --------------------------------------------------------------------------
+# 관리요령 표 본문 글자 크기/행 높이 자동 조정
+# --------------------------------------------------------------------------
+
+HANDLING_BODY_MAX_FONT_PT = 11
+HANDLING_BODY_MIN_FONT_PT = 8
+_HANDLING_LINE_HEIGHT_FACTOR = 1.2
+HANDLING_MIN_ROW_HEIGHT_EMU = 500000
+# 표 본문 5개 행(유해성/취급주의/보호구/응급조치/사고대처)의 표 행 인덱스.
+HANDLING_CONTENT_ROWS = (2, 3, 4, 5, 6)
+
+
+def _wrapped_line_count(text, font_pt, usable_width_emu):
+    if not text or usable_width_emu <= 0:
+        return 1
+    width = _estimate_text_width_emu(text, font_pt)
+    return max(1, -(-int(width) // int(usable_width_emu)))
+
+
+def _fit_handling_table_font(row_lines, usable_width_emu, t_ins, b_ins, budget_emu):
+    """표의 본문 5개 행 글자 크기를 한 번에 정하고, 그 크기에서 각 행에
+    필요한 높이(EMU)를 함께 돌려준다. 문장을 잘라내는 대신(…) 글자 크기를
+    줄이거나(최소 폰트까지) 각 행 높이를 늘려서, 내용이 길어도 인쇄 영역
+    (budget_emu) 안에 온전히 들어오게 한다."""
+    def heights_at(font_pt):
+        out = []
+        for lines in row_lines:
+            n_lines = sum(_wrapped_line_count(line, font_pt, usable_width_emu) for line in lines) or 1
+            h = int(n_lines * font_pt * _HANDLING_LINE_HEIGHT_FACTOR * EMU_PER_PT) + t_ins + b_ins
+            out.append(max(h, HANDLING_MIN_ROW_HEIGHT_EMU))
+        return out
+
+    for font_pt in range(HANDLING_BODY_MAX_FONT_PT, HANDLING_BODY_MIN_FONT_PT - 1, -1):
+        heights = heights_at(font_pt)
+        if sum(heights) <= budget_emu:
+            return font_pt, heights
+    # 최소 크기로도 못 맞으면(극단적으로 내용이 많은 경우), 그 크기 그대로
+    # 최선의 높이를 돌려준다(약간의 초과는 감수하되, 문장을 잘라내지는 않는다).
+    return HANDLING_BODY_MIN_FONT_PT, heights_at(HANDLING_BODY_MIN_FONT_PT)
+
+
+# --------------------------------------------------------------------------
 # 템플릿 B: 관리요령
 # --------------------------------------------------------------------------
 
@@ -473,17 +514,45 @@ def build_handling_slide(msds, out_path, template_path=HANDLING_TEMPLATE):
 
     _set_paragraph_text(tbl.cell(0, 0).text_frame._txBody.find(qn("a:p")), msds.product_name)
 
-    _replace_paragraphs(tbl.cell(2, 1).text_frame._txBody, _hazard_bullets(msds.hazard_statements, msds.classification))
-    _replace_paragraphs(tbl.cell(3, 1).text_frame._txBody, _handling_bullets(msds))
-    _replace_paragraphs(tbl.cell(4, 1).text_frame._txBody, _ppe_bullets(msds))
-    _replace_paragraphs(tbl.cell(5, 1).text_frame._txBody, _first_aid_bullets(msds))
-    _replace_paragraphs(tbl.cell(6, 1).text_frame._txBody, _accident_response_bullets(msds))
+    row_lines = {
+        2: _hazard_bullets(msds.hazard_statements, msds.classification),
+        3: _handling_bullets(msds),
+        4: _ppe_bullets(msds),
+        5: _first_aid_bullets(msds),
+        6: _accident_response_bullets(msds),
+    }
+    for idx, lines in row_lines.items():
+        _replace_paragraphs(tbl.cell(idx, 1).text_frame._txBody, lines)
+
+    # 본문 5개 행 글자 크기를 내용 길이에 맞춰 재계산해, 문장을 "…"로 잘라내지
+    # 않으면서도 표 전체가 인쇄 영역(슬라이드 하단)을 벗어나지 않도록 한다.
+    rows = list(tbl.rows)
+    bodyPr = tbl.cell(2, 1).text_frame._txBody.find(qn("a:bodyPr"))
+    t_ins = int(bodyPr.get("tIns", "45720")) if bodyPr is not None else 45720
+    b_ins = int(bodyPr.get("bIns", "45720")) if bodyPr is not None else 45720
+    l_ins = int(bodyPr.get("lIns", "91440")) if bodyPr is not None else 91440
+    r_ins = int(bodyPr.get("rIns", "91440")) if bodyPr is not None else 91440
+    usable_width = tbl.columns[1].width - l_ins - r_ins
+
+    fixed_rows_height = sum(rows[i].height for i in range(len(rows)) if i not in HANDLING_CONTENT_ROWS)
+    budget = (prs.slide_height - table_shape.top) - fixed_rows_height
+
+    font_pt, needed_heights = _fit_handling_table_font(
+        [row_lines[i] for i in HANDLING_CONTENT_ROWS], usable_width, t_ins, b_ins, budget
+    )
+    for idx, needed_height in zip(HANDLING_CONTENT_ROWS, needed_heights):
+        rows[idx].height = needed_height
+        for p in tbl.cell(idx, 1).text_frame._txBody.findall(qn("a:p")):
+            for r in p.findall(qn("a:r")):
+                rPr = r.find(qn("a:rPr"))
+                if rPr is not None:
+                    rPr.set("sz", str(int(font_pt * 100)))
+    table_shape.height = sum(row.height for row in rows)
 
     pic_names = {s.name for s in slide.shapes if s.shape_type == MSO_SHAPE_TYPE.PICTURE}
     _remove_pictures(slide, pic_names)
     # 그림문자 칸은 표 2번째 행(가로 두 칸 병합)이다. 그 칸의 실제 좌표를 계산해
     # 그 안에서 가로 중앙 정렬 + 칸 높이에 맞춘 최대 크기로 배치한다.
-    rows = list(tbl.rows)
     pic_row_top = table_shape.top + rows[0].height
     pic_row_height = rows[1].height
     codes = ghs.pictograms_for_hcodes([c for c, _ in msds.hazard_statements])

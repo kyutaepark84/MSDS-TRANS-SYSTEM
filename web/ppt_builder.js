@@ -519,6 +519,42 @@ function handlingBullets(msds) {
   return lines;
 }
 
+// --------------------------------------------------------------------------
+// 관리요령 표 본문 글자 크기/행 높이 자동 조정
+// --------------------------------------------------------------------------
+
+const HANDLING_BODY_MAX_FONT_PT = 11;
+const HANDLING_BODY_MIN_FONT_PT = 8;
+const HANDLING_LINE_HEIGHT_FACTOR = 1.2;
+const HANDLING_MIN_ROW_HEIGHT_EMU = 500000;
+// 표 본문 5개 행(유해성/취급주의/보호구/응급조치/사고대처)의 표 행 인덱스.
+const HANDLING_CONTENT_ROWS = [2, 3, 4, 5, 6];
+
+function wrappedLineCount(text, fontPt, usableWidthEmu) {
+  if (!text || usableWidthEmu <= 0) return 1;
+  const width = estimateTextWidthEmu(text, fontPt);
+  return Math.max(1, Math.ceil(width / usableWidthEmu));
+}
+
+// 표의 본문 5개 행 글자 크기를 한 번에 정하고, 그 크기에서 각 행에 필요한
+// 높이(EMU)를 함께 돌려준다. 문장을 잘라내는 대신(…) 글자 크기를 줄이거나
+// (최소 폰트까지) 각 행 높이를 늘려서, 내용이 길어도 인쇄 영역(budgetEmu)
+// 안에 온전히 들어오게 한다.
+function fitHandlingTableFont(rowLines, usableWidthEmu, tIns, bIns, budgetEmu) {
+  const heightsAt = (fontPt) => rowLines.map((lines) => {
+    const nLines = lines.reduce((sum, line) => sum + wrappedLineCount(line, fontPt, usableWidthEmu), 0) || 1;
+    const h = Math.round(nLines * fontPt * HANDLING_LINE_HEIGHT_FACTOR * EMU_PER_PT) + tIns + bIns;
+    return Math.max(h, HANDLING_MIN_ROW_HEIGHT_EMU);
+  });
+  for (let fontPt = HANDLING_BODY_MAX_FONT_PT; fontPt >= HANDLING_BODY_MIN_FONT_PT; fontPt--) {
+    const heights = heightsAt(fontPt);
+    if (heights.reduce((a, b) => a + b, 0) <= budgetEmu) return { fontPt, heights };
+  }
+  // 최소 크기로도 못 맞으면(극단적으로 내용이 많은 경우), 그 크기 그대로
+  // 최선의 높이를 돌려준다(약간의 초과는 감수하되, 문장을 잘라내지는 않는다).
+  return { fontPt: HANDLING_BODY_MIN_FONT_PT, heights: heightsAt(HANDLING_BODY_MIN_FONT_PT) };
+}
+
 async function buildHandlingSlide(msds) {
   const zip = await loadTemplateZip(MSDS_ASSETS.handlingTemplate);
   const doc = await getSlideDoc(zip);
@@ -544,11 +580,49 @@ async function buildHandlingSlide(msds) {
 
   setParagraphText(firstEl(firstEl(cellsOf(0)[0], NS.a, "txBody"), NS.a, "p"), msds.productName);
 
-  replaceParagraphs(firstEl(cellsOf(2)[1], NS.a, "txBody"), hazardBulletsForHandling(msds.hazardStatements, msds.classification));
-  replaceParagraphs(firstEl(cellsOf(3)[1], NS.a, "txBody"), handlingBullets(msds));
-  replaceParagraphs(firstEl(cellsOf(4)[1], NS.a, "txBody"), ppeBullets(msds));
-  replaceParagraphs(firstEl(cellsOf(5)[1], NS.a, "txBody"), firstAidBullets(msds));
-  replaceParagraphs(firstEl(cellsOf(6)[1], NS.a, "txBody"), accidentResponseBullets(msds));
+  const rowLinesMap = {
+    2: hazardBulletsForHandling(msds.hazardStatements, msds.classification),
+    3: handlingBullets(msds),
+    4: ppeBullets(msds),
+    5: firstAidBullets(msds),
+    6: accidentResponseBullets(msds),
+  };
+  for (const idx of HANDLING_CONTENT_ROWS) {
+    replaceParagraphs(firstEl(cellsOf(idx)[1], NS.a, "txBody"), rowLinesMap[idx]);
+  }
+
+  // 본문 5개 행 글자 크기를 내용 길이에 맞춰 재계산해, 문장을 "…"로 잘라내지
+  // 않으면서도 표 전체가 인쇄 영역(슬라이드 하단)을 벗어나지 않도록 한다.
+  const bodyPr2 = firstEl(firstEl(cellsOf(2)[1], NS.a, "txBody"), NS.a, "bodyPr");
+  const tIns = parseInt((bodyPr2 && bodyPr2.getAttribute("tIns")) || "45720", 10);
+  const bIns = parseInt((bodyPr2 && bodyPr2.getAttribute("bIns")) || "45720", 10);
+  const lIns = parseInt((bodyPr2 && bodyPr2.getAttribute("lIns")) || "91440", 10);
+  const rIns = parseInt((bodyPr2 && bodyPr2.getAttribute("rIns")) || "91440", 10);
+
+  const gridCols = allEls(firstEl(tbl, NS.a, "tblGrid"), NS.a, "gridCol");
+  const col1Width = parseInt(gridCols[1].getAttribute("w"), 10);
+  const usableWidth = col1Width - lIns - rIns;
+
+  const fixedRowsHeight = rows.reduce((sum, r, i) => (
+    HANDLING_CONTENT_ROWS.includes(i) ? sum : sum + parseInt(r.getAttribute("h"), 10)
+  ), 0);
+  const tableTopNow = parseInt(off0.getAttribute("y"), 10);
+  const budget = (HANDLING_SLIDE_HEIGHT_EMU - tableTopNow) - fixedRowsHeight;
+
+  const { fontPt, heights } = fitHandlingTableFont(
+    HANDLING_CONTENT_ROWS.map((idx) => rowLinesMap[idx]), usableWidth, tIns, bIns, budget
+  );
+  HANDLING_CONTENT_ROWS.forEach((idx, i) => {
+    rows[idx].setAttribute("h", String(Math.round(heights[i])));
+    for (const p of allEls(cellsOf(idx)[1], NS.a, "p")) {
+      for (const r of allEls(p, NS.a, "r")) {
+        const rPr = firstEl(r, NS.a, "rPr");
+        if (rPr) rPr.setAttribute("sz", String(Math.round(fontPt * 100)));
+      }
+    }
+  });
+  const newTotalHeight = rows.reduce((sum, r) => sum + parseInt(r.getAttribute("h"), 10), 0);
+  ext0.setAttribute("cy", String(newTotalHeight));
 
   // 그림문자 칸은 표 2번째 행(가로 두 칸 병합)이다. 그 칸의 실제 좌표를 계산해
   // 그 안에서 가로 중앙 정렬 + 칸 높이에 맞춘 최대 크기로 배치한다.
