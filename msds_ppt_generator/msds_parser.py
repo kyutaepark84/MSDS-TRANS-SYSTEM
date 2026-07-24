@@ -407,6 +407,64 @@ def _parse_section2(section2):
 # 섹션 3: 구성성분
 # --------------------------------------------------------------------------
 
+# 화학물질명 뒤에 "관용명/이명" 칸이 바로 붙어 있는 문서가 많아(예: "크롬
+# 자료없음", "Toluene Methylbenzene"), 단어 표기 형태(대소문자 등)만으로는
+# "다음 단어가 화학물질명의 연장인지 관용명 칸의 시작인지"를 안정적으로 구분할
+# 수 없다(실제로 시도했다가 휘발유 문서에서 관용명이 이름에 잘못 붙는 회귀가
+# 발생함: "Toluene"의 관용명 "Methylbenzene"도 Title Case라 이름처럼 보임).
+# 그래서 "그 다음 단어가 원소명이거나 화합물 접미어일 때만" 이어붙인다 — 이건
+# 화학물질명이 "원소/화합물류"일 때만 참이 되는 좁고 안전한 신호라, "알루미늄
+# 산화물"/"Sodium Aluminum Hexafluoride" 같은 진짜 여러 단어 이름은 온전히
+# 잡히면서도 "자료없음"/"Methylbenzene" 같은 관용명은 걸러진다.
+_COMPOSITION_CONTINUATION_WORDS_KO = {
+    "산화물", "수산화물", "과산화물", "황산염", "황화물", "아황산염", "염화물",
+    "불화물", "브롬화물", "요오드화물", "질산염", "아질산염", "탄산염", "중탄산염",
+    "인산염", "아인산염", "규산염", "붕산염", "크롬산염", "중크롬산염", "시안화물",
+    "초산염", "아세트산염", "수화물", "화합물", "합금",
+    "알루미늄", "나트륨", "칼륨", "칼슘", "마그네슘", "철", "구리", "아연", "니켈",
+    "크롬", "망간", "코발트", "주석", "납", "은", "금", "백금", "티타늄", "규소",
+    "붕소", "인", "황", "염소", "불소", "브롬", "요오드", "탄소", "질소", "수소", "산소",
+}
+_COMPOSITION_CONTINUATION_WORDS_EN = {
+    "oxide", "hydroxide", "peroxide", "sulfate", "sulfite", "sulfide", "chloride",
+    "fluoride", "hexafluoride", "tetrafluoride", "trifluoride", "bromide", "iodide",
+    "nitride", "nitrate", "nitrite", "carbonate", "bicarbonate", "phosphate",
+    "phosphide", "phosphite", "silicate", "borate", "chromate", "dichromate",
+    "permanganate", "cyanide", "acetate", "oxalate", "arsenate", "arsenide",
+    "selenide", "selenate", "telluride", "azide", "hydride", "carbide", "silicide",
+    "boride", "amide", "imide", "monoxide", "dioxide", "trioxide",
+    "sodium", "potassium", "calcium", "magnesium", "aluminum", "aluminium", "iron",
+    "copper", "zinc", "nickel", "chromium", "manganese", "cobalt", "tin", "lead",
+    "silver", "gold", "platinum", "titanium", "silicon", "boron", "phosphorus",
+    "sulfur", "chlorine", "fluorine", "bromine", "iodine", "carbon", "nitrogen",
+    "hydrogen", "oxygen", "barium", "lithium", "strontium", "tungsten", "molybdenum",
+    "vanadium", "zirconium", "cadmium", "arsenic", "antimony", "bismuth", "mercury",
+}
+
+
+def _extract_composition_name(before):
+    """화학물질명 칸을 "before"(직전 행 함유량 끝 ~ 이번 CAS 시작) 구간에서
+    찾는다. 이름은 한글 단어일 수도(NC-T30R 등) 영문 화학명일 수도(휘발유 등)
+    있고, "Sodium Aluminum Hexafluoride"처럼 여러 단어인 경우도 있다."""
+    first_m = _COMPOSITION_NAME_FIRST_RE.search(before)
+    if not first_m:
+        return ""
+    words = [first_m.group(0)]
+    is_korean = bool(re.match(r"^[가-힣]", words[0]))
+    allowed = _COMPOSITION_CONTINUATION_WORDS_KO if is_korean else _COMPOSITION_CONTINUATION_WORDS_EN
+    rest = before[first_m.end():]
+    for word_m in re.finditer(r"\s+(\S+)", rest):
+        token = word_m.group(1)
+        key = token.lower() if not is_korean else token
+        if key not in allowed:
+            break
+        words.append(token)
+    return " ".join(words).strip()
+
+
+_COMPOSITION_NAME_FIRST_RE = re.compile(r"(?:\d+(?:,\d+)*-)?[A-Za-z가-힣][A-Za-z가-힣0-9\-]*")
+
+
 def _parse_composition(section3, product_name=""):
     section3 = re.sub(r"구성\s*성분의?\s*명칭\s*및\s*함유량", "", section3)
     # "이 제품의 물질은 혼합물로 구성"류 안내문(단일물질인 경우 "단일 화학물질로
@@ -444,13 +502,7 @@ def _parse_composition(section3, product_name=""):
         # 안내문이 함께 걸려 이름으로 오인될 여지가 남아있어 이쪽이 더 좁고 정확).
         before_start = max(cas_matches[i - 1].end() if i > 0 else 0, prev_content_end)
         before = section3[max(before_start, m.start() - 60):m.start()]
-        # 이름은 한글 단어일 수도(NC-T30R 등) 영문 화학명일 수도(휘발유 등) 있다.
-        # "관용명/이명" 칸이 바로 뒤에 붙어 있어도(예: "크롬 자료없음", "Ethylbenzene
-        # Benzene, ethyl-") 그건 제외하고 화학물질명 칸 하나만 가져와야 하므로,
-        # (공백으로 끝나는) 첫 번째 단어류 토큰만 취한다 — 표 안에서 가장 먼저
-        # 나오는 이름류 어구가 항상 화학물질명 칸이기 때문이다.
-        name_m = re.search(r"(?:\d+(?:,\d+)*-)?[A-Za-z가-힣][A-Za-z가-힣0-9\-]*", before)
-        name = name_m.group(0).strip() if name_m else ""
+        name = _extract_composition_name(before)
         if not name or name in _COMPOSITION_HEADER_NOISE:
             name = KNOWN_CAS_NAMES.get(m.group(0), name)
 

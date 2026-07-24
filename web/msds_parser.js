@@ -363,6 +363,58 @@ function parseSection2(section2) {
 // 섹션 3: 구성성분
 // --------------------------------------------------------------------------
 
+// 화학물질명 뒤에 "관용명/이명" 칸이 바로 붙어 있는 문서가 많아(예: "크롬
+// 자료없음", "Toluene Methylbenzene"), 단어 표기 형태(대소문자 등)만으로는
+// "다음 단어가 화학물질명의 연장인지 관용명 칸의 시작인지"를 안정적으로 구분할
+// 수 없다(실제로 시도했다가 휘발유 문서에서 관용명이 이름에 잘못 붙는 회귀가
+// 발생함: "Toluene"의 관용명 "Methylbenzene"도 Title Case라 이름처럼 보임).
+// 그래서 "그 다음 단어가 원소명이거나 화합물 접미어일 때만" 이어붙인다 — 이건
+// 화학물질명이 "원소/화합물류"일 때만 참이 되는 좁고 안전한 신호라, "알루미늄
+// 산화물"/"Sodium Aluminum Hexafluoride" 같은 진짜 여러 단어 이름은 온전히
+// 잡히면서도 "자료없음"/"Methylbenzene" 같은 관용명은 걸러진다.
+const _COMPOSITION_CONTINUATION_WORDS_KO = new Set([
+  "산화물", "수산화물", "과산화물", "황산염", "황화물", "아황산염", "염화물",
+  "불화물", "브롬화물", "요오드화물", "질산염", "아질산염", "탄산염", "중탄산염",
+  "인산염", "아인산염", "규산염", "붕산염", "크롬산염", "중크롬산염", "시안화물",
+  "초산염", "아세트산염", "수화물", "화합물", "합금",
+  "알루미늄", "나트륨", "칼륨", "칼슘", "마그네슘", "철", "구리", "아연", "니켈",
+  "크롬", "망간", "코발트", "주석", "납", "은", "금", "백금", "티타늄", "규소",
+  "붕소", "인", "황", "염소", "불소", "브롬", "요오드", "탄소", "질소", "수소", "산소",
+]);
+const _COMPOSITION_CONTINUATION_WORDS_EN = new Set([
+  "oxide", "hydroxide", "peroxide", "sulfate", "sulfite", "sulfide", "chloride",
+  "fluoride", "hexafluoride", "tetrafluoride", "trifluoride", "bromide", "iodide",
+  "nitride", "nitrate", "nitrite", "carbonate", "bicarbonate", "phosphate",
+  "phosphide", "phosphite", "silicate", "borate", "chromate", "dichromate",
+  "permanganate", "cyanide", "acetate", "oxalate", "arsenate", "arsenide",
+  "selenide", "selenate", "telluride", "azide", "hydride", "carbide", "silicide",
+  "boride", "amide", "imide", "monoxide", "dioxide", "trioxide",
+  "sodium", "potassium", "calcium", "magnesium", "aluminum", "aluminium", "iron",
+  "copper", "zinc", "nickel", "chromium", "manganese", "cobalt", "tin", "lead",
+  "silver", "gold", "platinum", "titanium", "silicon", "boron", "phosphorus",
+  "sulfur", "chlorine", "fluorine", "bromine", "iodine", "carbon", "nitrogen",
+  "hydrogen", "oxygen", "barium", "lithium", "strontium", "tungsten", "molybdenum",
+  "vanadium", "zirconium", "cadmium", "arsenic", "antimony", "bismuth", "mercury",
+]);
+
+const _COMPOSITION_NAME_FIRST_RE = /(?:\d+(?:,\d+)*-)?[A-Za-z가-힣][A-Za-z가-힣0-9\-]*/;
+
+function extractCompositionName(before) {
+  const firstM = _COMPOSITION_NAME_FIRST_RE.exec(before);
+  if (!firstM) return "";
+  const words = [firstM[0]];
+  const isKorean = /^[가-힣]/.test(words[0]);
+  const allowed = isKorean ? _COMPOSITION_CONTINUATION_WORDS_KO : _COMPOSITION_CONTINUATION_WORDS_EN;
+  const rest = before.slice(firstM.index + firstM[0].length);
+  for (const wordM of rest.matchAll(/\s+(\S+)/g)) {
+    const token = wordM[1];
+    const key = isKorean ? token : token.toLowerCase();
+    if (!allowed.has(key)) break;
+    words.push(token);
+  }
+  return words.join(" ").trim();
+}
+
 function parseComposition(section3, productName = "") {
   section3 = section3.replace(/구성\s*성분의?\s*명칭\s*및\s*함유량/g, "");
   // "이 제품의 물질은 혼합물로 구성"류 안내문(단일물질인 경우 "단일 화학물질로
@@ -405,13 +457,7 @@ function parseComposition(section3, productName = "") {
     const casPrevEnd = i > 0 ? casMatches[i - 1].index + casMatches[i - 1][0].length : 0;
     const beforeStart = Math.max(casPrevEnd, prevContentEnd);
     const before = section3.slice(Math.max(beforeStart, m.index - 60), m.index);
-    // 이름은 한글 단어일 수도(NC-T30R 등) 영문 화학명일 수도(휘발유 등) 있다.
-    // "관용명/이명" 칸이 바로 뒤에 붙어 있어도(예: "크롬 자료없음", "Ethylbenzene
-    // Benzene, ethyl-") 그건 제외하고 화학물질명 칸 하나만 가져와야 하므로,
-    // (공백으로 끝나는) 첫 번째 단어류 토큰만 취한다 — 표 안에서 가장 먼저
-    // 나오는 이름류 어구가 항상 화학물질명 칸이기 때문이다.
-    const nameM = /(?:\d+(?:,\d+)*-)?[A-Za-z가-힣][A-Za-z가-힣0-9\-]*/.exec(before);
-    let name = nameM ? nameM[0].trim() : "";
+    let name = extractCompositionName(before);
     if (!name || _COMPOSITION_HEADER_NOISE.has(name)) {
       name = KNOWN_CAS_NAMES[m[0]] || name || "";
     }
