@@ -423,9 +423,11 @@ async function buildLabelSlide(msds) {
     }
   }
 
-  // 신호어
+  // 신호어 (원본이 "신호어 : 해당없음"으로 명시한 문서는 실제로 GHS
+  // 미분류 제품이라 신호어가 없는 것이 맞으므로, "경고"로 임의 대체하지
+  // 않고 원본 값을 그대로(없으면 빈 칸으로) 반영한다.
   const rect15 = findShapeByName(doc, "Rectangle 15");
-  setParagraphText(firstEl(txBodyOf(rect15), NS.a, "p"), msds.signalWord || "경고");
+  setParagraphText(firstEl(txBodyOf(rect15), NS.a, "p"), msds.signalWord || "");
 
   // 공급자 정보
   const rect16 = findShapeByName(doc, "Rectangle 16");

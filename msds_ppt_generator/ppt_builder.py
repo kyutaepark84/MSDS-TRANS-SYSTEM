@@ -362,9 +362,11 @@ def build_label_slide(msds, out_path, template_path=LABEL_TEMPLATE):
             if rPr is not None:
                 rPr.set("sz", str(int(content_pt * 100)))
 
-    # 신호어
+    # 신호어 (원본이 "신호어 : 해당없음"으로 명시한 문서는 실제로 GHS
+    # 미분류 제품이라 신호어가 없는 것이 맞으므로, "경고"로 임의 대체하지
+    # 않고 원본 값을 그대로(없으면 빈 칸으로) 반영한다.
     rect15 = shapes["Rectangle 15"]
-    _set_paragraph_text(_txbody_of(rect15).find(qn("a:p")), msds.signal_word or "경고")
+    _set_paragraph_text(_txbody_of(rect15).find(qn("a:p")), msds.signal_word)
 
     # 공급자 정보 (최소 10pt 유지, 한 줄에 안 맞으면 전화번호 앞에서 두 줄로)
     rect16 = shapes["Rectangle 16"]
