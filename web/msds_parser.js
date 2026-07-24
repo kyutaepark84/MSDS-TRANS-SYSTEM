@@ -9,7 +9,7 @@
 //
 // 입력은 파일 경로가 아니라, PDF.js 등으로 이미 추출한 "페이지별 원문 텍스트 배열"이다.
 
-const SEP = "[·ㆍ•・∙]"; // 가운뎃점 표기 변형
+const SEP = "[·ㆍ•・∙,]"; // 가운뎃점 표기 변형(쉼표로 쓰는 문서도 있음)
 
 const SECTION_TITLE_PATTERNS = {
   1: "화학제품과\\s*회사에\\s*관한\\s*정보",
@@ -20,14 +20,14 @@ const SECTION_TITLE_PATTERNS = {
   6: "누출\\s*사고\\s*시\\s*대처\\s*방법",
   7: "취급\\s*및\\s*저장\\s*방법",
   8: "노출\\s*방지\\s*및\\s*개인\\s*보호구",
-  9: `물리\\s*${SEP}?\\s*화학적\\s*특성`,
+  9: `물리\\s*${SEP}?\\s*화학적\\s*특(?:성|징)`,
   10: "안정성\\s*및\\s*반응성",
   11: "독성에\\s*관한\\s*정보",
   12: "환경에\\s*미치는\\s*영향",
   13: "폐기\\s*시?\\s*주의사항",
-  14: "운송에\\s*필요한\\s*정보",
+  14: "운송에\\s*필요한\\s*정(?:보|도)",
   15: "법적\\s*규제\\s*현황",
-  16: "(?:그\\s*밖의|기타)\\s*참고사항",
+  16: "(?:그\\s*밖(?:의|에)|기타)\\s*참고사항",
 };
 
 const _REVISION_DATE_RE = /최종개정일자\s*[:：]\s*([\d.]+)/;
@@ -38,10 +38,11 @@ const _CAS_RE = /\d{2,7}-\d{2}-\d/g;
 // 한글 순서 마커로 실제 쓰이는 글자만(임의의 한글 한 글자가 ")"/"." 앞에 오는
 // 경우까지 마커로 오인하지 않도록 범위를 좁힌다. 예: "신경계통)" 오탐 방지.
 const _ORDINAL_CHARS = "가나다라마바사아자차카타파하";
+// 한글 순서 마커가 "가."(마침표) 대신 "가)"(괄호)로 쓰이는 문서도 있다.
 const STOP = new RegExp(
-  `(?=[${_ORDINAL_CHARS}]\\.\\s|\\d+\\)|\\d+(?:\\.\\d+)+\\.?|-\\s+\\S|○\\s*\\S|$)`
+  `(?=[${_ORDINAL_CHARS}]\\.\\s|[${_ORDINAL_CHARS}]\\)|\\d+\\)|\\d+(?:\\.\\d+)+\\.?|-\\s+\\S|○\\s*\\S|$)`
 );
-const _STOP_MATCH_SRC = `[${_ORDINAL_CHARS}]\\.\\s|\\d+\\)|\\d+(?:\\.\\d+)+\\.?|-\\s+\\S|○\\s*\\S`;
+const _STOP_MATCH_SRC = `[${_ORDINAL_CHARS}]\\.\\s|[${_ORDINAL_CHARS}]\\)|\\d+\\)|\\d+(?:\\.\\d+)+\\.?|-\\s+\\S|○\\s*\\S`;
 
 const _BOILERPLATE_PATTERNS = [
   /물\s*질\s*안\s*전\s*보\s*건\s*자\s*료\s*\(Material Safety Data Sheets\)\s*문서번호\s*\S+\s*개정번호\s*\S+\s*개정일자\s*[\d.\s]+년?월?일?/g,
@@ -250,9 +251,11 @@ function parseSupplierPhone(section1) {
 // 통째로 삼켜버린다(예: 회사명이 "한국쓰리엠 주소: 서울특별시 ... 전화: ...
 // 긴급전화번호: ..." 전체가 되어버림). 그래서 이 필드들을 캡처할 때는 서로를
 // 추가 경계로 함께 써서 다음 레이블 앞에서 멈추도록 한다.
+// 콜론 없이 레이블만 쓰는 문서도 있어(예: "회사명 제일연마공업㈜ 주소 경북 ...")
+// 콜론을 필수로 요구하지 않는다.
 const _SUPPLIER_FIELD_STOP =
-  "회사명\\s*[:：]|주\\s*소\\s*[:：]|전화\\s*(?:번호)?\\s*[:：]|팩스\\s*(?:번호)?\\s*[:：]|" +
-  "웹\\s*사이트|홈페이지|e-?mail\\s*[:：]|긴급\\s*(?:연락\\s*)?(?:전화|연락처)\\s*(?:번호)?\\s*[:：]?";
+  "회사명\\s*[:：]?|주\\s*소\\s*[:：]?|전화\\s*(?:번호)?\\s*[:：]?|팩스\\s*(?:번호)?\\s*[:：]?|" +
+  "웹\\s*사이트|홈페이지|e-?mail\\s*[:：]?|긴급\\s*(?:연락\\s*)?(?:전화|연락처)\\s*(?:번호)?\\s*[:：]?";
 
 function parseSection1(section1) {
   const name = parseProductName(section1);
@@ -274,7 +277,17 @@ function parseSection1(section1) {
 // --------------------------------------------------------------------------
 
 function parseClassification(section2) {
-  const body = section2.replace(new RegExp(`유해성?${SEP}?\\s*위험성\\s*분류`), "");
+  // 섹션 제목 자체("2.유해성, 위험성")도 "유해성...위험성"을 포함하고 있어,
+  // 먼저 이 제목 앞부분을 지워야 그 안의 "위험성"이 뒤 "가)유해성,위험성
+  // 분류"를 지운 자리에 잔여 글자로 남아 분류명 앞에 잘못 붙지 않는다.
+  let body = section2.replace(new RegExp(`^\\s*2\\.\\s*${SECTION_TITLE_PATTERNS[2]}`), "");
+  // "가)유해성,위험성 분류"처럼 앞에 한글 순서 마커가 바로 붙어 있는 문서가
+  // 있어, 그 마커도 함께 지워야 뒤이은 첫 분류명이 마커/제목 잔여 글자를
+  // 덧붙인 채로 잡히지 않는다.
+  body = body.replace(
+    new RegExp(`(?:[${_ORDINAL_CHARS}]\\)|[${_ORDINAL_CHARS}]\\.\\s)?\\s*유해성?${SEP}?\\s*위험성\\s*분류`),
+    ""
+  );
   const pairs = [];
   const re = /([가-힣][가-힣0-9()\-/\s]{1,30}?)\s*[:：]?\s*구분\s*(\d+)/g;
   let m;
@@ -307,7 +320,7 @@ function extractCodedStatements(text, codeRe, maxChars = 150) {
     const win = desc.slice(0, 90);
     const periodM = /[.!?]/.exec(win);
     const markerRe = new RegExp(
-      `(?:(?<![가-힣])[${_ORDINAL_CHARS}]\\)|\\d+\\)|\\d+(?:\\.\\d+)+|[HP]\\d{3}|예방조치문구|응급조치요령|○)`
+      `(?:(?<![가-힣])[${_ORDINAL_CHARS}]\\)|\\d+\\)|\\d+(?:\\.\\d+)+|[HP]\\d{3}|예방조치\\s*문구|응급조치요령|○)`
     );
     const markerM = markerRe.exec(win);
     const candidates = [];
@@ -335,6 +348,21 @@ function groupPrecautionCodes(section2, pEntries) {
     let m;
     while ((m = re.exec(section2)) !== null) {
       anchors.push([m.index, key]);
+    }
+  }
+  if (!anchors.length) {
+    // 일부 문서는 "가)/나)" 같은 전용 순서 마커 없이 "예방조치 문구/대응/
+    // 저장/폐기"처럼 필드명만으로 그룹을 구분한다("예방"은 "예방조치 문구"로
+    // 나타남). 그런 문서에서는 위 마커-앞잡이 방식으로 앵커를 하나도 못
+    // 찾으므로, 순서 마커 없이 레이블 단어 자체를 경계로 쓴다(\b 대신
+    // 한글 전후 lookaround로 "고립된 단어"만 매치되게 한다).
+    const bareGroupLabels = { prevention: "예방(?:조치\\s*문구)?", response: "대응", storage: "저장", disposal: "폐기" };
+    for (const [key, word] of Object.entries(bareGroupLabels)) {
+      const re = new RegExp(`(?<![가-힣])(?:${word})(?![가-힣])`, "g");
+      let m;
+      while ((m = re.exec(section2)) !== null) {
+        anchors.push([m.index, key]);
+      }
     }
   }
   anchors.sort((a, b) => a[0] - b[0]);
@@ -415,8 +443,41 @@ function extractCompositionName(before) {
   return words.join(" ").trim();
 }
 
+const _CAS_HEADER_RE = /CAS\s*[.\s]*(?:번호|No\.?|NO)?/i;
+
+function parseCompositionReversed(section3) {
+  // 일부 문서는 표 열 순서가 "구성(역할) | 명칭 | 함유량(%) | CAS.NO"라서
+  // 함유량이 CAS보다 먼저 나오고(다른 문서 대부분과 반대), CAS가 없는 혼합물
+  // 행은 그 자리에 "혼합물"/"자료없음" 같은 자리표시자가 온다(예: "연마재
+  // ALUNDUM 70~80% 1344-28-1", "본드 Cured resin 10~20% 혼합물"). "구성"
+  // (연마재/본드/충진제/보강제 등 역할 분류로, 화학물질명이 아님) 다음에 오는
+  // "명칭"칸을 화학물질명으로 취한다.
+  section3 = section3.replace(/구성|명칭|함유량(?:\s*\(?%\)?)?|CAS\s*[.\s]*(?:번호|No\.?|NO)?/gi, "");
+  const out = [];
+  // 맨 앞 "구성"(역할: 연마재/본드/충진제/보강제 등)은 항상 한글 단어이므로,
+  // 남아있는 절 번호("3.") 같은 잡문자를 역할 칸으로 잘못 집지 않도록
+  // \S+ 대신 한글 전용으로 좁힌다.
+  const pattern = /[가-힣]+\s+(.+?)\s*(\d[\d.]*(?:\s*~\s*\d[\d.]*)?)\s*%\s*(\d{2,7}-\d{2}-\d|혼합물|자료없음)/g;
+  for (const m of section3.matchAll(pattern)) {
+    const name = m[1].trim();
+    const content = m[2].replace(/\s+/g, "");
+    const cas = m[3];
+    if (name) out.push([name, cas, content]);
+  }
+  return out;
+}
+
 function parseComposition(section3, productName = "") {
   section3 = section3.replace(/구성\s*성분의?\s*명칭\s*및\s*함유량/g, "");
+  // 표 헤더에서 "함유량"이 "CAS"보다 먼저 나오면 열 순서가 반대인 문서다
+  // (구성/명칭/함유량/CAS.NO 순). 이 경우는 완전히 다른 파싱 전략이 필요하다.
+  // (섹션 제목 자체를 이미 지운 뒤에 판단해야, 제목에 포함된 "...명칭 및
+  // 함유량"의 "함유량"을 표 헤더로 착각해 항상 반대 순서로 오판하지 않는다.)
+  const contentHeaderM = /함유량/.exec(section3);
+  const casHeaderM = _CAS_HEADER_RE.exec(section3);
+  if (contentHeaderM && casHeaderM && contentHeaderM.index < casHeaderM.index) {
+    return parseCompositionReversed(section3);
+  }
   // "이 제품의 물질은 혼합물로 구성"류 안내문(단일물질인 경우 "단일 화학물질로
   // 구성"으로도 쓰임)은 표 앞에 붙는 상투어라, 지우지 않으면 첫 행의 이름
   // 탐색 구간에 걸려 "이"처럼 엉뚱한 글자가 이름으로 잡힌다.
@@ -513,22 +574,46 @@ function extractProductNameFromFilename(filename) {
 // 섹션 4~8: 응급조치/화재/누출/취급저장/보호구
 // --------------------------------------------------------------------------
 
+// 레이블 dict의 다른 레이블들을 하나의 대체(|) 패턴으로 묶는다. 전용
+// 하위번호("가)/나)" 등) 없이 필드명만으로 다음 항목과 구분되는 문서에서,
+// 같은 dict의 다른 레이블이 바로 뒤에 붙어 있어도 그 레이블 앞에서 캡처를
+// 멈추게 하는 데 쓴다(값이 다음 필드 레이블까지 통째로 삼키는 것을 방지).
+// exclude(현재 캡처 중인 키)는 반드시 빼야 한다 — 일부 레이블은 오탐 방지를
+// 위해 폭넓게 짜여 있어(예: "적절한(부적절한) 소화제"용 패턴이 뒤에 나오는
+// "부적절한 소화제"라는 별개 문구 안의 "적절한"과도 우연히 겹쳐 매치될 수
+// 있음), 자기 자신을 경계로 넣으면 자기 값 안에서 스스로를 잘라먹는다.
+function labelsAsExtraStop(labels, exclude = null) {
+  return Object.entries(labels)
+    .filter(([k]) => k !== exclude)
+    .map(([, p]) => `(?:${p})`)
+    .join("|");
+}
+
 function parseFirstAid(section4) {
   const out = {};
   for (const [key, label] of Object.entries(FIRST_AID_LABELS)) {
     const m = new RegExp(label).exec(section4);
     if (!m) continue;
-    const captured = captureAfterLabel(section4, label, 200);
+    const extraStop = labelsAsExtraStop(FIRST_AID_LABELS, key);
+    const captured = captureAfterLabel(section4, label, 200, extraStop);
     out[key] = { label: m[0], text: firstSentences(captured) };
   }
   return out;
 }
 
+// "적절한 소화제" 바로 뒤에 오는 "부적절한 소화제"/"대형 화재시"는 그 자체로는
+// FIREFIGHTING_LABELS의 어느 키에도 대응하지 않는(별도로 값을 뽑지 않는)
+// 형제 하위 항목이지만, 그래도 "적절한 소화제" 값이 그 항목까지 삼키지
+// 않도록 경계로는 써야 한다.
+const _FIREFIGHTING_EXTRA_STOP = "부적절한\\s*소화제|대형\\s*화재시";
+
 function parseFirefighting(section5) {
   const out = {};
   for (const [key, label] of Object.entries(FIREFIGHTING_LABELS)) {
     if (!new RegExp(label).test(section5)) continue;
-    const captured = captureAfterLabel(section5, label, 150);
+    let extraStop = labelsAsExtraStop(FIREFIGHTING_LABELS, key);
+    extraStop = extraStop ? `${extraStop}|${_FIREFIGHTING_EXTRA_STOP}` : _FIREFIGHTING_EXTRA_STOP;
+    const captured = captureAfterLabel(section5, label, 150, extraStop);
     out[key] = firstSentences(captured, 1, 80);
   }
   return out;
@@ -538,7 +623,13 @@ function parseAccidentalRelease(section6) {
   const out = {};
   for (const [key, label] of Object.entries(ACCIDENTAL_RELEASE_LABELS)) {
     if (!new RegExp(label).test(section6)) continue;
-    const captured = captureAfterLabel(section6, label, 150);
+    const extraStop = labelsAsExtraStop(ACCIDENTAL_RELEASE_LABELS, key);
+    let captured = captureAfterLabel(section6, label, 150, extraStop);
+    // "인체를 보호하기 위해 필요한 조치사항 및 보호구"처럼 레이블 자체가 두
+    // 줄로 나뉜 문서는, 줄 순서상 레이블의 둘째 줄("및 보호구")이 값보다
+    // 뒤에 붙어 나온다(예: "자료없음 및 보호구"). 값 뒤에 붙은 레이블
+    // 잔여 문구를 떼어낸다.
+    captured = captured.replace(/\s*및\s*보호구\s*$/, "");
     out[key] = firstSentences(captured, 1, 80);
   }
   return out;
@@ -548,7 +639,8 @@ function parseHandlingStorage(section7) {
   const out = {};
   for (const [key, label] of Object.entries(HANDLING_STORAGE_LABELS)) {
     if (!new RegExp(label).test(section7)) continue;
-    const captured = captureAfterLabel(section7, label, 400);
+    const extraStop = labelsAsExtraStop(HANDLING_STORAGE_LABELS, key);
+    const captured = captureAfterLabel(section7, label, 400, extraStop);
     out[key] = sentences(captured, 4, 85);
   }
   return out;
@@ -558,7 +650,8 @@ function parseExposureControls(section8) {
   const out = {};
   for (const [key, label] of Object.entries(PPE_LABELS)) {
     if (!new RegExp(label).test(section8)) continue;
-    const captured = captureAfterLabel(section8, label, 200);
+    const extraStop = labelsAsExtraStop(PPE_LABELS, key);
+    const captured = captureAfterLabel(section8, label, 200, extraStop);
     out[key] = firstSentences(captured, 1, 80);
   }
   return out;

@@ -39,7 +39,7 @@ SECTION_TITLES = {
     16: "그 밖의 참고사항",
 }
 
-SEP = r"[·ㆍ•・∙]"  # 가운뎃점 표기 변형
+SEP = r"[·ㆍ•・∙,]"  # 가운뎃점 표기 변형(쉼표로 쓰는 문서도 있음)
 
 SECTION_TITLE_PATTERNS = {
     1: r"화학제품과\s*회사에\s*관한\s*정보",
@@ -50,14 +50,14 @@ SECTION_TITLE_PATTERNS = {
     6: r"누출\s*사고\s*시\s*대처\s*방법",
     7: r"취급\s*및\s*저장\s*방법",
     8: r"노출\s*방지\s*및\s*개인\s*보호구",
-    9: rf"물리\s*{SEP}?\s*화학적\s*특성",
+    9: rf"물리\s*{SEP}?\s*화학적\s*특(?:성|징)",
     10: r"안정성\s*및\s*반응성",
     11: r"독성에\s*관한\s*정보",
     12: r"환경에\s*미치는\s*영향",
     13: r"폐기\s*시?\s*주의사항",
-    14: r"운송에\s*필요한\s*정보",
+    14: r"운송에\s*필요한\s*정(?:보|도)",
     15: r"법적\s*규제\s*현황",
-    16: r"(?:그\s*밖의|기타)\s*참고사항",
+    16: r"(?:그\s*밖(?:의|에)|기타)\s*참고사항",
 }
 
 _REVISION_DATE_RE = re.compile(r"최종개정일자\s*[:：]\s*([\d.]+)")
@@ -68,10 +68,11 @@ _CAS_RE = re.compile(r"\d{2,7}-\d{2}-\d")
 # 한글 순서 마커로 실제 쓰이는 글자만(임의의 한글 한 글자가 ")"/"." 앞에 오는
 # 경우까지 마커로 오인하지 않도록 범위를 좁힌다. 예: "신경계통)" 오탐 방지.
 _ORDINAL_CHARS = "가나다라마바사아자차카타파하"
+# 한글 순서 마커가 "가."(마침표) 대신 "가)"(괄호)로 쓰이는 문서도 있다.
 STOP = (
-    rf"(?=[{_ORDINAL_CHARS}]\.\s|\d+\)|\d+(?:\.\d+)+\.?|-\s+\S|○\s*\S|\Z)"
+    rf"(?=[{_ORDINAL_CHARS}]\.\s|[{_ORDINAL_CHARS}]\)|\d+\)|\d+(?:\.\d+)+\.?|-\s+\S|○\s*\S|\Z)"
 )
-_STOP_MATCH = rf"[{_ORDINAL_CHARS}]\.\s|\d+\)|\d+(?:\.\d+)+\.?|-\s+\S|○\s*\S"
+_STOP_MATCH = rf"[{_ORDINAL_CHARS}]\.\s|[{_ORDINAL_CHARS}]\)|\d+\)|\d+(?:\.\d+)+\.?|-\s+\S|○\s*\S"
 
 _BOILERPLATE_PATTERNS = [
     r"물\s*질\s*안\s*전\s*보\s*건\s*자\s*료\s*\(Material Safety Data Sheets\)\s*문서번호\s*\S+\s*개정번호\s*\S+\s*개정일자\s*[\d.\s]+년?월?일?",
@@ -305,9 +306,11 @@ def _parse_supplier_phone(section1):
 # 통째로 삼켜버린다(예: 회사명이 "한국쓰리엠 주소: 서울특별시 ... 전화: ...
 # 긴급전화번호: ..." 전체가 되어버림). 그래서 이 필드들을 캡처할 때는 서로를
 # 추가 경계로 함께 써서 다음 레이블 앞에서 멈추도록 한다.
+# 콜론 없이 레이블만 쓰는 문서도 있어(예: "회사명 제일연마공업㈜ 주소 경북 ...")
+# 콜론을 필수로 요구하지 않는다.
 _SUPPLIER_FIELD_STOP = (
-    r"회사명\s*[:：]|주\s*소\s*[:：]|전화\s*(?:번호)?\s*[:：]|팩스\s*(?:번호)?\s*[:：]|"
-    r"웹\s*사이트|홈페이지|e-?mail\s*[:：]|긴급\s*(?:연락\s*)?(?:전화|연락처)\s*(?:번호)?\s*[:：]?"
+    r"회사명\s*[:：]?|주\s*소\s*[:：]?|전화\s*(?:번호)?\s*[:：]?|팩스\s*(?:번호)?\s*[:：]?|"
+    r"웹\s*사이트|홈페이지|e-?mail\s*[:：]?|긴급\s*(?:연락\s*)?(?:전화|연락처)\s*(?:번호)?\s*[:：]?"
 )
 
 
@@ -329,7 +332,17 @@ def _parse_section1(section1):
 # --------------------------------------------------------------------------
 
 def _parse_classification(section2):
-    body = re.sub(rf"유해성?{SEP}?\s*위험성\s*분류", "", section2, count=1)
+    # 섹션 제목 자체("2.유해성, 위험성")도 "유해성...위험성"을 포함하고 있어,
+    # 먼저 이 제목 앞부분을 지워야 그 안의 "위험성"이 뒤 "가)유해성,위험성
+    # 분류"를 지운 자리에 잔여 글자로 남아 분류명 앞에 잘못 붙지 않는다.
+    body = re.sub(rf"^\s*2\.\s*{SECTION_TITLE_PATTERNS[2]}", "", section2, count=1)
+    # "가)유해성,위험성 분류"처럼 앞에 한글 순서 마커가 바로 붙어 있는 문서가
+    # 있어, 그 마커도 함께 지워야 뒤이은 첫 분류명이 "위험성 가) 특정표적장기..."
+    # 처럼 마커/제목 잔여 글자를 덧붙인 채로 잡히지 않는다.
+    body = re.sub(
+        rf"(?:[{_ORDINAL_CHARS}]\)|[{_ORDINAL_CHARS}]\.\s)?\s*유해성?{SEP}?\s*위험성\s*분류",
+        "", body, count=1,
+    )
     pairs = []
     for m in re.finditer(r"([가-힣][가-힣0-9()\-/\s]{1,30}?)\s*[:：]?\s*구분\s*(\d+)", body):
         pairs.append((m.group(1).strip(), f"구분{m.group(2)}"))
@@ -360,7 +373,8 @@ def _extract_coded_statements(text, code_re, max_chars=150):
         window = desc[:90]
         period_m = re.search(r"[.!?]", window)
         marker_m = re.search(
-            rf"(?:(?<![가-힣])[{_ORDINAL_CHARS}]\)|\d+\)|\d+(?:\.\d+)+|[HP]\d{{3}}|예방조치문구|응급조치요령|○)", window
+            rf"(?:(?<![가-힣])[{_ORDINAL_CHARS}]\)|\d+\)|\d+(?:\.\d+)+|[HP]\d{{3}}|"
+            r"예방조치\s*문구|응급조치요령|○)", window
         )
         candidates = [c.end() if c is period_m else c.start() for c in (period_m, marker_m) if c]
         desc = window[:min(candidates)] if candidates else window
@@ -380,6 +394,17 @@ def _group_precaution_codes(section2, p_entries):
     for key, word in group_labels.items():
         for m in re.finditer(rf"(?:[{_ORDINAL_CHARS}]\)|\d+\)|\d+(?:\.\d+)+\.?)\s*{word}\b", section2):
             anchors.append((m.start(), key))
+    if not anchors:
+        # 일부 문서는 "가)/나)" 같은 전용 순서 마커 없이 "예방조치 문구/대응/
+        # 저장/폐기"처럼 필드명만으로 그룹을 구분한다("예방"은 "예방조치 문구"로
+        # 나타남). 그런 문서에서는 위 마커-앞잡이 방식으로 앵커를 하나도 못
+        # 찾으므로, 순서 마커 없이 레이블 단어 자체를 경계로 쓴다.
+        bare_group_labels = {
+            "prevention": r"예방(?:조치\s*문구)?", "response": "대응", "storage": "저장", "disposal": "폐기",
+        }
+        for key, word in bare_group_labels.items():
+            for m in re.finditer(rf"(?<![가-힣])(?:{word})(?![가-힣])", section2):
+                anchors.append((m.start(), key))
     anchors.sort()
     result = {k: [] for k in group_labels}
     for code, desc, pos in p_entries:
@@ -465,8 +490,44 @@ def _extract_composition_name(before):
 _COMPOSITION_NAME_FIRST_RE = re.compile(r"(?:\d+(?:,\d+)*-)?[A-Za-z가-힣][A-Za-z가-힣0-9\-]*")
 
 
+_CAS_HEADER_RE = re.compile(r"CAS\s*[.\s]*(?:번호|No\.?|NO)?", re.IGNORECASE)
+
+
+def _parse_composition_reversed(section3):
+    """일부 문서는 표 열 순서가 "구성(역할) | 명칭 | 함유량(%) | CAS.NO"라서
+    함유량이 CAS보다 먼저 나오고(다른 문서 대부분과 반대), CAS가 없는 혼합물
+    행은 그 자리에 "혼합물"/"자료없음" 같은 자리표시자가 온다(예: "연마재
+    ALUNDUM 70~80% 1344-28-1", "본드 Cured resin 10~20% 혼합물"). "구성"
+    (연마재/본드/충진제/보강제 등 역할 분류로, 화학물질명이 아님) 다음에 오는
+    "명칭"칸을 화학물질명으로 취한다."""
+    section3 = re.sub(r"구성|명칭|함유량(?:\s*\(?%\)?)?|CAS\s*[.\s]*(?:번호|No\.?|NO)?", "", section3)
+    out = []
+    # 맨 앞 "구성"(역할: 연마재/본드/충진제/보강제 등)은 항상 한글 단어이므로,
+    # 남아있는 절 번호("3.") 같은 잡문자를 역할 칸으로 잘못 집지 않도록
+    # \S+ 대신 한글 전용으로 좁힌다.
+    pattern = re.compile(
+        r"[가-힣]+\s+(.+?)\s*(\d[\d.]*(?:\s*~\s*\d[\d.]*)?)\s*%\s*(\d{2,7}-\d{2}-\d|혼합물|자료없음)"
+    )
+    for m in pattern.finditer(section3):
+        name, content, cas = m.groups()
+        name = name.strip()
+        content = content.replace(" ", "")
+        if name:
+            out.append((name, cas, content))
+    return out
+
+
 def _parse_composition(section3, product_name=""):
     section3 = re.sub(r"구성\s*성분의?\s*명칭\s*및\s*함유량", "", section3)
+    # 표 헤더에서 "함유량"이 "CAS"보다 먼저 나오면 열 순서가 반대인 문서다
+    # (구성/명칭/함유량/CAS.NO 순). 이 경우는 완전히 다른 파싱 전략이 필요하다.
+    # (섹션 제목 자체를 이미 지운 뒤에 판단해야, 제목에 포함된 "...명칭 및
+    # 함유량"의 "함유량"을 표 헤더로 착각해 항상 반대 순서로 오판하지 않는다.)
+    content_header_m = re.search(r"함유량", section3)
+    cas_header_m = _CAS_HEADER_RE.search(section3)
+    if content_header_m and cas_header_m and content_header_m.start() < cas_header_m.start():
+        return _parse_composition_reversed(section3)
+
     # "이 제품의 물질은 혼합물로 구성"류 안내문(단일물질인 경우 "단일 화학물질로
     # 구성"으로도 쓰임)은 표 앞에 붙는 상투어라, 지우지 않으면 첫 행의 이름
     # 탐색 구간에 걸려 "이"처럼 엉뚱한 글자가 이름으로 잡힌다.
@@ -543,15 +604,35 @@ def _parse_composition(section3, product_name=""):
 # 섹션 4~8: 응급조치/화재/누출/취급저장/보호구
 # --------------------------------------------------------------------------
 
+def _labels_as_extra_stop(labels, exclude=None):
+    """레이블 dict의 다른 레이블들을 하나의 대체(|) 패턴으로 묶는다. 전용
+    하위번호("가)/나)" 등) 없이 필드명만으로 다음 항목과 구분되는 문서에서,
+    같은 dict의 다른 레이블이 바로 뒤에 붙어 있어도 그 레이블 앞에서 캡처를
+    멈추게 하는 데 쓴다(값이 다음 필드 레이블까지 통째로 삼키는 것을 방지).
+    exclude(현재 캡처 중인 키)는 반드시 빼야 한다 — 일부 레이블은 오탐 방지를
+    위해 폭넓게 짜여 있어(예: "적절한(부적절한) 소화제"용 패턴이 뒤에 나오는
+    "부적절한 소화제"라는 별개 문구 안의 "적절한"과도 우연히 겹쳐 매치될 수
+    있음), 자기 자신을 경계로 넣으면 자기 값 안에서 스스로를 잘라먹는다."""
+    return "|".join(f"(?:{p})" for k, p in labels.items() if k != exclude)
+
+
 def _parse_first_aid(section4):
     out = {}
     for key, label in FIRST_AID_LABELS.items():
         m = re.search(label, section4)
         if not m:
             continue
-        captured = _capture_after_label(section4, label, max_chars=200)
+        extra_stop = _labels_as_extra_stop(FIRST_AID_LABELS, exclude=key)
+        captured = _capture_after_label(section4, label, max_chars=200, extra_stop=extra_stop)
         out[key] = {"label": m.group(0), "text": _first_sentences(captured)}
     return out
+
+
+# "적절한 소화제" 바로 뒤에 오는 "부적절한 소화제"/"대형 화재시"는 그 자체로는
+# FIREFIGHTING_LABELS의 어느 키에도 대응하지 않는(별도로 값을 뽑지 않는)
+# 형제 하위 항목이지만, 그래도 "적절한 소화제" 값이 그 항목까지 삼키지
+# 않도록 경계로는 써야 한다.
+_FIREFIGHTING_EXTRA_STOP = r"부적절한\s*소화제|대형\s*화재시"
 
 
 def _parse_firefighting(section5):
@@ -559,7 +640,9 @@ def _parse_firefighting(section5):
     for key, label in FIREFIGHTING_LABELS.items():
         if not re.search(label, section5):
             continue
-        captured = _capture_after_label(section5, label, max_chars=150)
+        extra_stop = _labels_as_extra_stop(FIREFIGHTING_LABELS, exclude=key)
+        extra_stop = f"{extra_stop}|{_FIREFIGHTING_EXTRA_STOP}" if extra_stop else _FIREFIGHTING_EXTRA_STOP
+        captured = _capture_after_label(section5, label, max_chars=150, extra_stop=extra_stop)
         out[key] = _first_sentences(captured, max_sentences=1, max_chars=80)
     return out
 
@@ -569,7 +652,13 @@ def _parse_accidental_release(section6):
     for key, label in ACCIDENTAL_RELEASE_LABELS.items():
         if not re.search(label, section6):
             continue
-        captured = _capture_after_label(section6, label, max_chars=150)
+        extra_stop = _labels_as_extra_stop(ACCIDENTAL_RELEASE_LABELS, exclude=key)
+        captured = _capture_after_label(section6, label, max_chars=150, extra_stop=extra_stop)
+        # "인체를 보호하기 위해 필요한 조치사항 및 보호구"처럼 레이블 자체가 두
+        # 줄로 나뉜 문서는, 줄 순서상 레이블의 둘째 줄("및 보호구")이 값보다
+        # 뒤에 붙어 나온다(예: "자료없음 및 보호구"). 값 뒤에 붙은 레이블
+        # 잔여 문구를 떼어낸다.
+        captured = re.sub(r"\s*및\s*보호구\s*$", "", captured)
         out[key] = _first_sentences(captured, max_sentences=1, max_chars=80)
     return out
 
@@ -579,7 +668,8 @@ def _parse_handling_storage(section7):
     for key, label in HANDLING_STORAGE_LABELS.items():
         if not re.search(label, section7):
             continue
-        captured = _capture_after_label(section7, label, max_chars=400)
+        extra_stop = _labels_as_extra_stop(HANDLING_STORAGE_LABELS, exclude=key)
+        captured = _capture_after_label(section7, label, max_chars=400, extra_stop=extra_stop)
         out[key] = _sentences(captured, max_sentences=4, max_chars_each=85)
     return out
 
@@ -589,7 +679,8 @@ def _parse_exposure_controls(section8):
     for key, label in PPE_LABELS.items():
         if not re.search(label, section8):
             continue
-        captured = _capture_after_label(section8, label, max_chars=200)
+        extra_stop = _labels_as_extra_stop(PPE_LABELS, exclude=key)
+        captured = _capture_after_label(section8, label, max_chars=200, extra_stop=extra_stop)
         out[key] = _first_sentences(captured, max_sentences=1, max_chars=80)
     return out
 
