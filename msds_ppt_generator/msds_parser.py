@@ -44,14 +44,14 @@ SEP = r"[·ㆍ•・∙,]"  # 가운뎃점 표기 변형(쉼표로 쓰는 문서
 SECTION_TITLE_PATTERNS = {
     1: r"화학제품과\s*회사에\s*관한\s*정보",
     2: rf"유해성?\s*{SEP}?\s*위험성",
-    3: r"구성\s*성분의?\s*명칭\s*및\s*함유량",
+    3: r"구성\s*성분(?:의|과)?\s*명칭\s*및\s*함유량",  # "구성성분과 명칭..."처럼 조사가 다른 문서도 있음
     4: r"응급\s*조치\s*요령",
     5: rf"폭발\s*{SEP}?\s*화재\s*시\s*대처\s*방법",
     6: r"누출\s*사고\s*시\s*대처\s*방법",
     7: r"취급\s*및\s*저장\s*(?:방법|밥법)",  # 원본에 "방법"이 "밥법"으로 오타난 문서가 있음
     8: r"노출\s*방지\s*및\s*개인\s*보호구",
     9: rf"물리\s*{SEP}?\s*화학적\s*특(?:성|징)",
-    10: r"안정성\s*및\s*반응성",
+    10: r"안(?:정|전)성\s*및\s*반응성",  # "안전성"으로 오타난 문서가 있음(안정성이 맞음)
     11: r"독성에\s*관한\s*정보",
     12: r"환경에\s*미치는\s*영향",
     13: r"폐기\s*시?\s*주의사항",
@@ -63,16 +63,27 @@ SECTION_TITLE_PATTERNS = {
 _REVISION_DATE_RE = re.compile(r"최종개정일자\s*[:：]\s*([\d.]+)")
 _HCODE_RE = re.compile(r"H\d{3}(?:\+H\d{3})*")
 _PCODE_RE = re.compile(r"P\d{3}(?:\+P\d{3})*")
-_CAS_RE = re.compile(r"\d{2,7}-\d{2}-\d")
+# 일부 문서는 CAS 번호의 하이픈 앞뒤에 공백을 넣거나(예: "7732 – 18 - 5"),
+# 하이픈 대신 en-dash("–")를 섞어 쓴다. 둘 다 허용하고, 표시할 때는
+# 공백 없는 표준 하이픈 표기로 정규화한다.
+_CAS_RE = re.compile(r"\d{2,7}\s*[-–]\s*\d{2}\s*[-–]\s*\d")
+
+
+def _normalize_cas(raw_cas):
+    return re.sub(r"\s*[-–]\s*", "-", raw_cas)
 
 # 한글 순서 마커로 실제 쓰이는 글자만(임의의 한글 한 글자가 ")"/"." 앞에 오는
 # 경우까지 마커로 오인하지 않도록 범위를 좁힌다. 예: "신경계통)" 오탐 방지.
+# 그래도 "다"/"가" 등은 한국어 문장 종결형("씻어낸다.", "받는다.")에도 흔히
+# 나오므로, 그 글자가 바로 앞에 다른 한글(즉 어떤 단어의 마지막 글자)에
+# 이어 붙어 있으면(단어 중간/끝) 목록 마커가 아니라 문장 종결로 보고
+# 제외한다(목록 마커는 항상 공백/문장부호 뒤에서 새 항목으로 시작하므로).
 _ORDINAL_CHARS = "가나다라마바사아자차카타파하"
 # 한글 순서 마커가 "가."(마침표) 대신 "가)"(괄호)로 쓰이는 문서도 있다.
 STOP = (
-    rf"(?=[{_ORDINAL_CHARS}]\.\s|[{_ORDINAL_CHARS}]\)|\d+\)|\d+(?:\.\d+)+\.?|-\s+\S|○\s*\S|\Z)"
+    rf"(?=(?<![가-힣])[{_ORDINAL_CHARS}]\.\s|(?<![가-힣])[{_ORDINAL_CHARS}]\)|\(\d+\)|\d+\)|\d+(?:\.\d+)+\.?|-\s+\S|○\s*\S|\Z)"
 )
-_STOP_MATCH = rf"[{_ORDINAL_CHARS}]\.\s|[{_ORDINAL_CHARS}]\)|\d+\)|\d+(?:\.\d+)+\.?|-\s+\S|○\s*\S"
+_STOP_MATCH = rf"(?<![가-힣])[{_ORDINAL_CHARS}]\.\s|(?<![가-힣])[{_ORDINAL_CHARS}]\)|\(\d+\)|\d+\)|\d+(?:\.\d+)+\.?|-\s+\S|○\s*\S"
 
 _BOILERPLATE_PATTERNS = [
     r"물\s*질\s*안\s*전\s*보\s*건\s*자\s*료\s*\(Material Safety Data Sheets\)\s*문서번호\s*\S+\s*개정번호\s*\S+\s*개정일자\s*[\d.\s]+년?월?일?",
@@ -100,14 +111,14 @@ _COMPOSITION_HEADER_NOISE = {
 }
 
 FIRST_AID_LABELS = {
-    "eye": r"눈에\s*들어갔을\s*때",
+    "eye": r"눈에\s*들어\s*갔을\s*때",
     "skin": r"피부에\s*접촉(?:했|되었)을\s*때",
     "inhalation": r"흡입(?:했|하였)을\s*때",
     "ingestion": r"(?:먹었을\s*때|섭취(?:했|하였)을\s*때)",
 }
 FIREFIGHTING_LABELS = {
     "extinguishing": r"(?:적절한|절적한)\s*(?:\(및\s*부적절한\))?\s*소화제",
-    "hazards": r"화학물질로부터\s*생기는\s*특정\s*유해성",
+    "hazards": r"화학물질로부터\s*생기는\s*특정\s*유해성(?:\s*\([^)]*\))?",
     "protective": r"(?:화재\s*진압\s*시|화재진압시)\s*착용할\s*보호구(?:\s*및\s*예방조치)?",
 }
 ACCIDENTAL_RELEASE_LABELS = {
@@ -117,7 +128,7 @@ ACCIDENTAL_RELEASE_LABELS = {
 }
 HANDLING_STORAGE_LABELS = {
     "handling": r"안전\s*취급\s*요령",
-    "storage": r"안전한\s*저장\s*방법(?:\s*\([^)]*\))?",
+    "storage": r"(?:안전한\s*저장\s*방법|보관\s*방법)(?:\s*\([^)]*\))?",
 }
 PPE_LABELS = {
     "respiratory": r"호흡기\s*보호",
@@ -175,6 +186,16 @@ def extract_flat_text(pdf_path):
     flat = re.sub(r"[ \t]+", " ", full)
     flat = re.sub(r"\n+", " ", flat)
     flat = re.sub(r" +", " ", flat).strip()
+    # 원본 PDF에서 "-시오"류 어미가 줄바꿈으로 쪼개진 경우(예: "취하시\n오."),
+    # 줄바꿈을 공백으로 합치면서 "취하시 오."처럼 부자연스러운 공백이 남는다.
+    # "오" 뒤에 한글이 더 이어지면(예: "오전", "오류") 별개 단어이므로 건드리지
+    # 않고, 그 외의 경우에만(문장이 거기서 끝나는 경우) 붙여준다.
+    flat = re.sub(r"([가-힣]+시)\s+오(?![가-힣])", r"\1오", flat)
+    # 마침표 뒤에 공백 없이 바로 한글이 이어지는 경우(예: "내용물.용기를")는
+    # 정상적인 문장 종결이 아니라 원본의 오탈자(가운뎃점 등을 잘못 입력)일
+    # 가능성이 높다. 그대로 두면 문장이 거기서 끊긴 것으로 오인해 뒷부분이
+    # 잘려나가므로, 쉼표로 바꿔 하나로 이어지는 문장으로 취급한다.
+    flat = re.sub(r"(?<=[가-힣])\.(?=[가-힣])", ", ", flat)
     return flat, revision_date
 
 
@@ -350,6 +371,29 @@ def _parse_classification(section2):
         rf"(?:[{_ORDINAL_CHARS}]\)|[{_ORDINAL_CHARS}]\.\s)?\s*유해성?{SEP}?\s*위험성\s*분류",
         "", body, count=1,
     )
+    # 일부 문서는 분류명과 구분코드가 "1) 화학물질의 분류 : <이름> 2) 유해,
+    # 위험성 구분 : <구분N>"처럼 각각 별도 번호 항목으로 나뉘어 있다(건강
+    # 유해성/환경 유해성 등 유해성 종류별로 이 쌍이 여러 번 반복됨). 이 경우
+    # 아래의 일반 "이름 뒤에 바로 구분N" 패턴을 쓰면 레이블 문구 자체인
+    # "위험성 구분"이 이름으로 잘못 잡힌다(값 쪽에도 "구분"이 또 나오므로).
+    # 그래서 이 레이블 쌍 형식을 먼저 우선 탐지한다.
+    if re.search(r"화학물질의\s*분류", body):
+        names = [
+            m.group(1).strip()
+            for m in re.finditer(r"화학물질의\s*분류\s*[:：]?\s*(.+?)\s*(?=\d+\)|\Z)", body)
+        ]
+        grades = [
+            m.group(1).replace(" ", "")
+            for m in re.finditer(
+                rf"유해성?{SEP}?\s*위험성\s*구분\s*[:：]?\s*((?:만성)?구분\s*\d+|해당\s*없음)", body
+            )
+        ]
+        pairs = [
+            (name, grade) for name, grade in zip(names, grades)
+            if name and grade and "해당" not in grade
+        ]
+        if pairs:
+            return pairs[:15]
     pairs = []
     for m in re.finditer(r"([가-힣][가-힣0-9()\-/\s]{1,30}?)\s*[:：]?\s*구분\s*(\d+)", body):
         pairs.append((m.group(1).strip(), f"구분{m.group(2)}"))
@@ -381,7 +425,7 @@ def _extract_coded_statements(text, code_re, max_chars=150):
         period_m = re.search(r"[.!?]", window)
         marker_m = re.search(
             rf"(?:(?<![가-힣])[{_ORDINAL_CHARS}]\)|\d+\)|\d+(?:\.\d+)+|[HP]\d{{3}}|"
-            r"예방조치\s*문구|응급조치요령|○)", window
+            r"예방조치\s*문구|응급조치요령|<[가-힣]+>|○)", window
         )
         candidates = [c.end() if c is period_m else c.start() for c in (period_m, marker_m) if c]
         desc = window[:min(candidates)] if candidates else window
@@ -452,7 +496,7 @@ _COMPOSITION_CONTINUATION_WORDS_KO = {
     "산화물", "수산화물", "과산화물", "황산염", "황화물", "아황산염", "염화물",
     "불화물", "브롬화물", "요오드화물", "질산염", "아질산염", "탄산염", "중탄산염",
     "인산염", "아인산염", "규산염", "붕산염", "크롬산염", "중크롬산염", "시안화물",
-    "초산염", "아세트산염", "수화물", "화합물", "합금",
+    "초산염", "아세트산염", "수화물", "화합물", "합금", "공중합체", "중합체",
     "알루미늄", "나트륨", "칼륨", "칼슘", "마그네슘", "철", "구리", "아연", "니켈",
     "크롬", "망간", "코발트", "주석", "납", "은", "금", "백금", "티타늄", "규소",
     "붕소", "인", "황", "염소", "불소", "브롬", "요오드", "탄소", "질소", "수소", "산소",
@@ -481,10 +525,17 @@ def _extract_composition_name(before):
     first_m = _COMPOSITION_NAME_FIRST_RE.search(before)
     if not first_m:
         return ""
-    words = [first_m.group(0)]
-    is_korean = bool(re.match(r"^[가-힣]", words[0]))
+    name = first_m.group(0)
+    is_korean = bool(re.match(r"^[가-힣]", name))
     allowed = _COMPOSITION_CONTINUATION_WORDS_KO if is_korean else _COMPOSITION_CONTINUATION_WORDS_EN
     rest = before[first_m.end():]
+    # "물(water)"처럼 이름 바로 뒤에 공백 없이 괄호 별칭이 붙는 문서가 있다 —
+    # 그대로 이름의 일부로 이어붙인다.
+    paren_m = re.match(r"\([^()]{1,40}\)", rest)
+    if paren_m:
+        name += paren_m.group(0)
+        rest = rest[paren_m.end():]
+    words = [name]
     for word_m in re.finditer(r"\s+(\S+)", rest):
         token = word_m.group(1)
         key = token.lower() if not is_korean else token
@@ -513,19 +564,21 @@ def _parse_composition_reversed(section3):
     # 남아있는 절 번호("3.") 같은 잡문자를 역할 칸으로 잘못 집지 않도록
     # \S+ 대신 한글 전용으로 좁힌다.
     pattern = re.compile(
-        r"[가-힣]+\s+(.+?)\s*(\d[\d.]*(?:\s*~\s*\d[\d.]*)?)\s*%\s*(\d{2,7}-\d{2}-\d|혼합물|자료없음)"
+        r"[가-힣]+\s+(.+?)\s*(\d[\d.]*(?:\s*~\s*\d[\d.]*)?)\s*%\s*(\d{2,7}\s*[-–]\s*\d{2}\s*[-–]\s*\d|혼합물|자료없음)"
     )
     for m in pattern.finditer(section3):
         name, content, cas = m.groups()
         name = name.strip()
         content = content.replace(" ", "")
+        if cas not in ("혼합물", "자료없음"):
+            cas = _normalize_cas(cas)
         if name:
             out.append((name, cas, content))
     return out
 
 
 def _parse_composition(section3, product_name=""):
-    section3 = re.sub(r"구성\s*성분의?\s*명칭\s*및\s*함유량", "", section3)
+    section3 = re.sub(r"구성\s*성분(?:의|과)?\s*명칭\s*및\s*함유량", "", section3)
     # 표 헤더에서 "함유량"이 "CAS"보다 먼저 나오면 열 순서가 반대인 문서다
     # (구성/명칭/함유량/CAS.NO 순). 이 경우는 완전히 다른 파싱 전략이 필요하다.
     # (섹션 제목 자체를 이미 지운 뒤에 판단해야, 제목에 포함된 "...명칭 및
@@ -539,7 +592,13 @@ def _parse_composition(section3, product_name=""):
     # 구성"으로도 쓰임)은 표 앞에 붙는 상투어라, 지우지 않으면 첫 행의 이름
     # 탐색 구간에 걸려 "이"처럼 엉뚱한 글자가 이름으로 잡힌다.
     section3 = re.sub(r"이\s*제품의?\s*물질은\s*(?:단일\s*화학\s*물질로|혼합물로)\s*구성(?:됨|되어\s*있음)?\.?", "", section3)
-    section3 = re.sub(r"화학\s*물질명|물질명|관용명(?:\s*및\s*이명)?|이명\s*\(관용명\)|이명", "", section3)
+    # 일부 문서는 표 헤더 글자 사이사이에 공백을 넣어 렌더링한다(예: "화 학 물
+    # 질 명이 명"처럼 "화학물질명"+"이명"이 글자 단위로 띄어져 붙어서 나옴).
+    # 그런 문서를 위해 "화학물질명"/"이명" 각 글자 사이의 임의 공백도 허용한다.
+    section3 = re.sub(
+        r"화\s*학\s*물\s*질\s*명(?:\s*이\s*명)?|물질명|관용명(?:\s*및\s*이명)?|이명\s*\(관용명\)|이\s*명",
+        "", section3,
+    )
     # "CAS번호"와 "또는 식별번호"를 하나로 묶어서 지우면, 표 헤더가 두 줄로
     # 나뉘어 추출되는 문서(예: "CAS번호 또는 식별번" 다음 줄에 "호"만 떨어져
     # 나옴)에서 그 사이에 낀 "함유량 (%)" 때문에 통짜 매칭이 실패해 헤더
@@ -571,8 +630,9 @@ def _parse_composition(section3, product_name=""):
         before_start = max(cas_matches[i - 1].end() if i > 0 else 0, prev_content_end)
         before = section3[max(before_start, m.start() - 60):m.start()]
         name = _extract_composition_name(before)
+        cas = _normalize_cas(m.group(0))
         if not name or name in _COMPOSITION_HEADER_NOISE:
-            name = KNOWN_CAS_NAMES.get(m.group(0), name)
+            name = KNOWN_CAS_NAMES.get(cas, name)
 
         after_end = cas_matches[i + 1].start() if i + 1 < len(cas_matches) else len(section3)
         after = section3[m.end():after_end]
@@ -603,7 +663,7 @@ def _parse_composition(section3, product_name=""):
             content_offset += caps_m.end()
         prev_content_end = m.end() + content_offset
         if name and content:
-            out.append((name, m.group(0), content))
+            out.append((name, cas, content))
     return out
 
 
