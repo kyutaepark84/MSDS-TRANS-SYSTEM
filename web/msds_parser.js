@@ -9,7 +9,11 @@
 //
 // 입력은 파일 경로가 아니라, PDF.js 등으로 이미 추출한 "페이지별 원문 텍스트 배열"이다.
 
-const SEP = "[·ㆍ•・∙,]"; // 가운뎃점 표기 변형(쉼표로 쓰는 문서도 있음)
+// 가운뎃점 표기 변형(쉼표로 쓰는 문서도 있음). 일부 문서는 원본에서 Wingdings류
+// 기호 폰트로 넣은 가운뎃점이 PDF 텍스트 추출 시 유니코드 사용자 정의 영역(PUA,
+// U+E000~U+F8FF) 코드포인트로 그대로 빠져나온다(예: "유해성위험성"). 그런
+// 문자도 같은 역할의 구분자로 인정한다.
+const SEP = "[·ㆍ•・∙,-]";
 
 const SECTION_TITLE_PATTERNS = {
   1: "화학제품과\\s*회사에\\s*관한\\s*정보",
@@ -676,7 +680,10 @@ function parseFirstAid(section4) {
 // FIREFIGHTING_LABELS의 어느 키에도 대응하지 않는(별도로 값을 뽑지 않는)
 // 형제 하위 항목이지만, 그래도 "적절한 소화제" 값이 그 항목까지 삼키지
 // 않도록 경계로는 써야 한다.
-const _FIREFIGHTING_EXTRA_STOP = "부적절한\\s*소화제|대형\\s*화재시";
+// "대형 화재시"는 뒤에 콜론이 붙어 별도 하위 레이블로 쓰인 경우만 경계로
+// 인정해야 한다 — 콜론 없이 그냥 "대형 화재시 건조화학약품이나..."처럼
+// 실제 답변 문장의 첫 구절로 나오는 문서도 있다.
+const _FIREFIGHTING_EXTRA_STOP = "부적절한\\s*소화제|대형\\s*화재시\\s*[:：]";
 
 function parseFirefighting(section5) {
   const out = {};
@@ -684,7 +691,12 @@ function parseFirefighting(section5) {
     if (!new RegExp(label).test(section5)) continue;
     let extraStop = labelsAsExtraStop(FIREFIGHTING_LABELS, key);
     extraStop = extraStop ? `${extraStop}|${_FIREFIGHTING_EXTRA_STOP}` : _FIREFIGHTING_EXTRA_STOP;
-    const captured = captureAfterLabel(section5, label, 350, extraStop);
+    let captured = captureAfterLabel(section5, label, 350, extraStop);
+    // 일부 문서는 "5.1 적절한(및 부적절한) 소화제: 적절한 소화제: <내용>"처럼
+    // 번호가 붙은 항목 제목 바로 뒤에 같은 레이블을 콜론과 함께 한 번 더
+    // 되풀이해서 쓴다. 그대로 두면 이 반복된 레이블 글자가 캡처된 값의
+    // 맨 앞에 그대로 섞여 들어간다.
+    captured = captured.replace(new RegExp(`^${label}\\s*[:：]?\\s*`), "");
     out[key] = firstSentences(captured, 1, 220);
   }
   return out;

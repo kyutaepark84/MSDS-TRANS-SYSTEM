@@ -39,7 +39,11 @@ SECTION_TITLES = {
     16: "그 밖의 참고사항",
 }
 
-SEP = r"[·ㆍ•・∙,]"  # 가운뎃점 표기 변형(쉼표로 쓰는 문서도 있음)
+# 가운뎃점 표기 변형(쉼표로 쓰는 문서도 있음). 일부 문서는 원본에서 Wingdings류
+# 기호 폰트로 넣은 가운뎃점이 PDF 텍스트 추출 시 유니코드 사용자 정의 영역(PUA,
+# U+E000~U+F8FF) 코드포인트로 그대로 빠져나온다(예: "유해성위험성"). 그런
+# 문자도 같은 역할의 구분자로 인정한다.
+SEP = r"[·ㆍ•・∙,-]"
 
 SECTION_TITLE_PATTERNS = {
     1: r"화학제품과\s*회사에\s*관한\s*정보",
@@ -695,11 +699,15 @@ def _parse_first_aid(section4):
     return out
 
 
-# "적절한 소화제" 바로 뒤에 오는 "부적절한 소화제"/"대형 화재시"는 그 자체로는
+# "적절한 소화제" 바로 뒤에 오는 "부적절한 소화제:"/"대형 화재시:"는 그 자체로는
 # FIREFIGHTING_LABELS의 어느 키에도 대응하지 않는(별도로 값을 뽑지 않는)
 # 형제 하위 항목이지만, 그래도 "적절한 소화제" 값이 그 항목까지 삼키지
-# 않도록 경계로는 써야 한다.
-_FIREFIGHTING_EXTRA_STOP = r"부적절한\s*소화제|대형\s*화재시"
+# 않도록 경계로는 써야 한다. 단, "대형 화재시"는 뒤에 콜론이 붙어 별도
+# 하위 레이블로 쓰인 경우만 경계로 인정해야 한다 — 콜론 없이 그냥 "대형
+# 화재시 건조화학약품이나..."처럼 실제 답변 문장의 첫 구절로 나오는 문서도
+# 있어(콜론 없이 앞부분만 매치해 버리면 그 문서에서는 실제 내용이 시작하기도
+# 전에 캡처가 끊겨버림).
+_FIREFIGHTING_EXTRA_STOP = r"부적절한\s*소화제|대형\s*화재시\s*[:：]"
 
 
 def _parse_firefighting(section5):
@@ -710,6 +718,11 @@ def _parse_firefighting(section5):
         extra_stop = _labels_as_extra_stop(FIREFIGHTING_LABELS, exclude=key)
         extra_stop = f"{extra_stop}|{_FIREFIGHTING_EXTRA_STOP}" if extra_stop else _FIREFIGHTING_EXTRA_STOP
         captured = _capture_after_label(section5, label, max_chars=350, extra_stop=extra_stop)
+        # 일부 문서는 "5.1 적절한(및 부적절한) 소화제: 적절한 소화제: <내용>"처럼
+        # 번호가 붙은 항목 제목 바로 뒤에 같은 레이블을 콜론과 함께 한 번 더
+        # 되풀이해서 쓴다. 그대로 두면 이 반복된 레이블 글자가 캡처된 값의
+        # 맨 앞에 그대로 섞여 들어간다.
+        captured = re.sub(rf"^{label}\s*[:：]?\s*", "", captured)
         out[key] = _first_sentences(captured, max_sentences=1, max_chars=220)
     return out
 
