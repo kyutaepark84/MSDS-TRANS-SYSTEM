@@ -23,7 +23,7 @@ const SECTION_TITLE_PATTERNS = {
   5: `폭발\\s*${SEP}?\\s*화재\\s*시\\s*대처\\s*방법`,
   6: "누출\\s*사고\\s*시\\s*대처\\s*방법",
   7: "취급\\s*및\\s*저장\\s*(?:방법|밥법)", // 원본에 "방법"이 "밥법"으로 오타난 문서가 있음
-  8: "노출\\s*방지\\s*(?:및\\s*)?개인\\s*보호구", // "및"이 빠진 문서가 있음
+  8: "노출\\s*방지\\s*(?:(?:및|/)\\s*)?개인\\s*보호구", // "및"이 빠지거나 "/"로 대신 쓰인 문서가 있음
   9: `물리\\s*${SEP}?\\s*화학적\\s*특(?:성|징)`,
   10: "안(?:정|전)성\\s*및\\s*반응성", // "안전성"으로 오타난 문서가 있음(안정성이 맞음)
   11: "독성에\\s*관한\\s*정보",
@@ -35,8 +35,8 @@ const SECTION_TITLE_PATTERNS = {
 };
 
 const _REVISION_DATE_RE = /최종개정일자\s*[:：]\s*([\d.]+)/;
-const _HCODE_RE = /H\d{3}(?:\+H\d{3})*/g;
-const _PCODE_RE = /P\d{3}(?:\+P\d{3})*/g;
+const _HCODE_RE = /H\d{3}(?:\s*\+\s*H\d{3})*/g;
+const _PCODE_RE = /P\d{3}(?:\s*\+\s*P\d{3})*/g;
 // 일부 문서는 CAS 번호의 하이픈 앞뒤에 공백을 넣거나(예: "7732 – 18 - 5"),
 // 하이픈 대신 en-dash("–")를 섞어 쓴다. 둘 다 허용하고, 표시할 때는
 // 공백 없는 표준 하이픈 표기로 정규화한다.
@@ -420,7 +420,10 @@ function extractCodedStatements(text, codeRe, maxChars = 150) {
     // 함께 캡처되어 끝에 하이픈만 덩그러니 남는 경우가 있어 마지막으로 한 번
     // 더 정리한다.
     desc = desc.replace(/\s*-\s*$/, "").trim();
-    out.push([m[0], desc, m.index]);
+    // "P302 + P352"처럼 조합 코드의 "+" 앞뒤에 공백이 들어간 문서가 있어,
+    // 코드 자체는 공백 없는 표준 표기("P302+P352")로 정규화해 둔다.
+    const code = m[0].replace(/\s*\+\s*/g, "+");
+    out.push([code, desc, m.index]);
   }
   return out;
 }
@@ -595,6 +598,9 @@ function parseComposition(section3, productName = "") {
   // 잔여 글자가 이름으로 오인될 수 있다. 그래서 각각 따로 지운다.
   section3 = section3.replace(/CAS\s*번호/g, "");
   section3 = section3.replace(/또는\s*식별\s*번\s*호?/g, "");
+  // "CAS 번호" 뒤에 "또는" 없이 별도 열로 "식별번호"만 단독으로 오는
+  // 문서도 있다(예: "CAS 번호 식별번호 함유량(%)").
+  section3 = section3.replace(/식별\s*번호/g, "");
   // "식별번호"가 줄바꿈으로 "식별번"과 "호"로 쪼개져 추출되면, 떨어져 나간
   // "호" 한 글자가 열 순서상 "함유량 (%)" 바로 뒤에 붙어서 나온다. 위에서
   // 못 지운 그 "호"를 여기서 마저 지운다(안 지우면 다음 성분명으로 오인됨).
@@ -634,8 +640,10 @@ function parseComposition(section3, productName = "") {
     const after = section3.slice(m.index + m[0].length, afterEnd);
     // CAS 번호 뒤에는 "EU번호/식별번호"(예: "231-096-4/KE-21059")가 붙는
     // 경우도, EU번호 없이 "/KE-21971"처럼 식별번호만 슬래시로 바로 붙는
-    // 경우도 있어 앞의 EU번호 부분은 있어도 되고 없어도 되게 한다.
-    const identifierM = /^\s*(?:\d+-\d+(?:-\d+)?)?\/[A-Z]{1,4}-?\d*\s*/.exec(after);
+    // 경우도, 슬래시조차 없이 "KE-12554"처럼 식별번호 칸이 바로 오는
+    // 경우도 있어(별도 "식별번호" 칸이 있는 문서) 슬래시 자체도 있어도
+    // 되고 없어도 되게 한다.
+    const identifierM = /^\s*(?:\d+-\d+(?:-\d+)?)?\/?[A-Z]{1,4}-?\d*\s*/.exec(after);
     const searchArea = identifierM ? after.slice(identifierM[0].length) : after;
     // 함유량 구간(범위) 표기는 "~"(예: "10~30")를 쓰는 문서도, "-"(예: "60 - 70")를
     // 쓰는 문서도 있어 둘 다 구간 구분자로 인정한다.

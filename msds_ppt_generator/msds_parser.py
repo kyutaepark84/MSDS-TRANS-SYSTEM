@@ -6,8 +6,9 @@
   - PDF 텍스트 추출 시 줄바꿈이 거의 보존되지 않는 문서(한 페이지가 사실상
     한 줄로 뭉쳐 나오는 경우)가 있어, 줄바꿈 유무에 의존하지 않는다.
 
-전략: 페이지 텍스트를 pypdf의 layout 모드로 추출한 뒤(줄바꿈/표 순서가
-가장 잘 보존됨) 공백 하나로 정규화한 "flat text"를 만들고, 그 위에서
+전략: 페이지 텍스트를 pdfplumber로 추출한 뒤(글자 좌표 기반이라 표/2단
+레이아웃이 복잡한 문서에서도 줄바꿈/단어 순서가 비교적 잘 보존됨) 공백
+하나로 정규화한 "flat text"를 만들고, 그 위에서
   1) 1~16번 대항목은 법정 표준 제목 문구(약간의 표기 차이는 허용)로 위치를 찾고
   2) 각 대항목 내부의 개별 필드는 "레이블 뒤 텍스트"를 직접 정규식으로 찾아
      캡처한다(상위 하위번호 체계에 의존하지 않음).
@@ -18,7 +19,7 @@
 import re
 from dataclasses import dataclass, field
 
-from pypdf import PdfReader
+import pdfplumber
 
 SECTION_TITLES = {
     1: "화학제품과 회사에 관한 정보",
@@ -53,7 +54,7 @@ SECTION_TITLE_PATTERNS = {
     5: rf"폭발\s*{SEP}?\s*화재\s*시\s*대처\s*방법",
     6: r"누출\s*사고\s*시\s*대처\s*방법",
     7: r"취급\s*및\s*저장\s*(?:방법|밥법)",  # 원본에 "방법"이 "밥법"으로 오타난 문서가 있음
-    8: r"노출\s*방지\s*(?:및\s*)?개인\s*보호구",  # "및"이 빠진 문서가 있음
+    8: r"노출\s*방지\s*(?:(?:및|/)\s*)?개인\s*보호구",  # "및"이 빠지거나 "/"로 대신 쓰인 문서가 있음
     9: rf"물리\s*{SEP}?\s*화학적\s*특(?:성|징)",
     10: r"안(?:정|전)성\s*및\s*반응성",  # "안전성"으로 오타난 문서가 있음(안정성이 맞음)
     11: r"독성에\s*관한\s*정보",
@@ -65,8 +66,8 @@ SECTION_TITLE_PATTERNS = {
 }
 
 _REVISION_DATE_RE = re.compile(r"최종개정일자\s*[:：]\s*([\d.]+)")
-_HCODE_RE = re.compile(r"H\d{3}(?:\+H\d{3})*")
-_PCODE_RE = re.compile(r"P\d{3}(?:\+P\d{3})*")
+_HCODE_RE = re.compile(r"H\d{3}(?:\s*\+\s*H\d{3})*")
+_PCODE_RE = re.compile(r"P\d{3}(?:\s*\+\s*P\d{3})*")
 # 일부 문서는 CAS 번호의 하이픈 앞뒤에 공백을 넣거나(예: "7732 – 18 - 5"),
 # 하이픈 대신 en-dash("–")를 섞어 쓴다. 둘 다 허용하고, 표시할 때는
 # 공백 없는 표준 하이픈 표기로 정규화한다.
@@ -173,18 +174,25 @@ def _strip_boilerplate(text):
 
 
 def extract_flat_text(pdf_path):
-    """PDF를 layout 모드로 추출한 뒤, 반복되는 머리말/꼬리말을 지우고
-    공백을 하나로 정규화한 문자열을 돌려준다. 최종개정일자도 함께 반환한다."""
-    reader = PdfReader(pdf_path)
+    """PDF를 추출한 뒤, 반복되는 머리말/꼬리말을 지우고 공백을 하나로
+    정규화한 문자열을 돌려준다. 최종개정일자도 함께 반환한다.
+
+    이전에는 pypdf를 썼으나, 표/2단 레이아웃이 복잡한 문서에서 단어 사이
+    공백이 통째로 누락되거나 문장 부호 위치가 어긋나는 등 추출 품질이
+    떨어지는 경우가 있었다(예: 표 셀이 값-이름 순서로 뒤섞여 나오거나,
+    "노출한계를초과하는농도에서..."처럼 공백이 전혀 없이 붙어 나옴).
+    pdfplumber는 글자 좌표를 기반으로 단어/줄 구조를 더 안정적으로
+    재구성해, 같은 문서에서도 훨씬 자연스러운 문장으로 추출된다."""
     pages = []
     revision_date = ""
-    for page in reader.pages:
-        text = page.extract_text(extraction_mode="layout") or page.extract_text() or ""
-        if not revision_date:
-            m = _REVISION_DATE_RE.search(text)
-            if m:
-                revision_date = m.group(1)
-        pages.append(text)
+    with pdfplumber.open(pdf_path) as pdf:
+        for page in pdf.pages:
+            text = page.extract_text() or ""
+            if not revision_date:
+                m = _REVISION_DATE_RE.search(text)
+                if m:
+                    revision_date = m.group(1)
+            pages.append(text)
     full = "\n".join(pages)
     full = _strip_boilerplate(full)
     flat = re.sub(r"[ \t]+", " ", full)
@@ -213,6 +221,10 @@ def extract_flat_text(pdf_path):
     )
     flat = re.sub(r"\s*\(\s*\.{2,}\s*\)\s*", " ", flat)
     flat = re.sub(r" +", " ", flat).strip()
+    # pdfplumber는 글자 간격 판단이 애매한 경우 드물게 한 단어 내부에 공백을
+    # 하나 끼워 넣기도 한다(예: "비결정성"을 "비 결정성"으로). 실제로 관찰된
+    # 이런 복합어는 다시 붙여 정상 단어로 되돌린다.
+    flat = re.sub(r"비\s+결정성", "비결정성", flat)
     return flat, revision_date
 
 
@@ -471,7 +483,12 @@ def _extract_coded_statements(text, code_re, max_chars=150):
         # 함께 캡처되어 끝에 하이픈만 덩그러니 남는 경우가 있어 마지막으로 한 번
         # 더 정리한다.
         desc = re.sub(r"\s*-\s*$", "", desc).strip()
-        out.append((m.group(0), desc, m.start()))
+        # "P302 + P352"처럼 조합 코드의 "+" 앞뒤에 공백이 들어간 문서가 있어,
+        # 코드 자체는 공백 없는 표준 표기("P302+P352")로 정규화해 둔다(안 하면
+        # 뒷부분 코드가 이번 코드의 "설명"란에 그대로 남아 "+"만 담긴 항목이
+        # 하나 더 생기고, family_for_hcode 등 코드 문자열 비교도 어긋난다).
+        code = re.sub(r"\s*\+\s*", "+", m.group(0))
+        out.append((code, desc, m.start()))
     return out
 
 
@@ -641,6 +658,9 @@ def _parse_composition(section3, product_name=""):
     # 잔여 글자가 이름으로 오인될 수 있다. 그래서 각각 따로 지운다.
     section3 = re.sub(r"CAS\s*번호", "", section3)
     section3 = re.sub(r"또는\s*식별\s*번\s*호?", "", section3)
+    # "CAS 번호" 뒤에 "또는" 없이 별도 열로 "식별번호"만 단독으로 오는
+    # 문서도 있다(예: "CAS 번호 식별번호 함유량(%)").
+    section3 = re.sub(r"식별\s*번호", "", section3)
     # "식별번호"가 줄바꿈으로 "식별번"과 "호"로 쪼개져 추출되면, 떨어져 나간
     # "호" 한 글자가 열 순서상 "함유량 (%)" 바로 뒤에 붙어서 나온다. 위에서
     # 못 지운 그 "호"를 여기서 마저 지운다(안 지우면 다음 성분명으로 오인됨).
@@ -674,8 +694,11 @@ def _parse_composition(section3, product_name=""):
         after = section3[m.end():after_end]
         # CAS 번호 뒤에는 "EU번호/식별번호"(예: "231-096-4/KE-21059")가 붙는
         # 경우도, EU번호 없이 "/KE-21971"처럼 식별번호만 슬래시로 바로 붙는
-        # 경우도 있어 앞의 EU번호 부분은 있어도 되고 없어도 되게 한다.
-        identifier_m = re.match(r"\s*(?:\d+-\d+(?:-\d+)?)?/[A-Z]{1,4}-?\d*\s*", after)
+        # 경우도, 슬래시조차 없이 "KE-12554"처럼 식별번호 칸이 바로 오는
+        # 경우도 있어(별도 "식별번호" 칸이 있는 문서) 슬래시 자체도 있어도
+        # 되고 없어도 되게 한다. 슬래시 없이 매치하면, 식별번호 칸의 숫자를
+        # 함유량으로 오인해 잘라먹지 않도록 하는 게 이 매치의 핵심 역할이다.
+        identifier_m = re.match(r"\s*(?:\d+-\d+(?:-\d+)?)?/?[A-Z]{1,4}-?\d*\s*", after)
         search_area = after[identifier_m.end():] if identifier_m else after
         # 함유량 구간(범위) 표기는 "~"(예: "10~30")를 쓰는 문서도, "-"(예: "60 - 70")를
         # 쓰는 문서도 있어 둘 다 구간 구분자로 인정한다.
