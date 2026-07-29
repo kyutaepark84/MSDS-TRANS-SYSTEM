@@ -200,6 +200,19 @@ def extract_flat_text(pdf_path):
     # 가능성이 높다. 그대로 두면 문장이 거기서 끊긴 것으로 오인해 뒷부분이
     # 잘려나가므로, 쉼표로 바꿔 하나로 이어지는 문장으로 취급한다.
     flat = re.sub(r"(?<=[가-힣])\.(?=[가-힣])", ", ", flat)
+    # 일부 문서는 "특정표적장기" 등 세부 내용을 채우지 않고 "(...)" 같은
+    # 말줄임표 자리표시자만 남겨둔다(예: "신체 중 (...)에 손상을 일으킬 수
+    # 있음"). 그대로 두면 뒤에서 문장 종결(마침표) 판정 시 이 자리표시자 안의
+    # 점을 문장이 끝난 것으로 오인해 "신체 중 (."처럼 중간에서 잘려나간다.
+    # 자리표시자를 통째로 지우고, 바로 뒤에 조사 한 글자가 남아있으면 앞
+    # 단어에 그대로 붙여(공백 없이) "중 (...)에" -> "중에"처럼 자연스럽게
+    # 잇는다. 조사가 없는 경우는 그냥 지우고 남은 중복 공백만 정리한다.
+    flat = re.sub(
+        r"([가-힣]+)\s*\(\s*\.{2,}\s*\)\s*([은는이가을를에로와과의도만])(?=\s|$)",
+        r"\1\2", flat,
+    )
+    flat = re.sub(r"\s*\(\s*\.{2,}\s*\)\s*", " ", flat)
+    flat = re.sub(r" +", " ", flat).strip()
     return flat, revision_date
 
 
@@ -260,7 +273,13 @@ def _capture_after_label(text, label_pattern, max_chars=150, extra_stop=None):
         end = search_from + stop_m.start()
         break
     end = min(end, content_start + max_chars)
-    return rest[content_start:end].strip()
+    captured = rest[content_start:end].strip()
+    # 2단 표 레이아웃이 한 줄로 뭉개지며 순서가 꼬인 문서는, 실제 내용이
+    # 시작하기 전 부분이 다른 곳으로 밀려나고 "및"/"또는" 같은 접속사만
+    # 캡처의 맨 앞에 덩그러니 남기도 한다. 접속사로 시작하는 문장은 있을 수
+    # 없으므로(그 앞에 이어지던 내용이 잘려나갔다는 신호), 지운다.
+    captured = re.sub(r"^(?:및|또는)\s+", "", captured)
+    return captured
 
 
 def _sentences(text, max_sentences=4, max_chars_each=90):
@@ -351,7 +370,16 @@ def _parse_section1(section1):
     supplier_name = ""
     for label in (r"제조자\s*정보", r"회사명"):
         val = _capture_after_label(section1, label, extra_stop=_SUPPLIER_FIELD_STOP)
-        if val:
+        # "제조자 정보(수입품의 경우 ... 기재)"처럼, 레이블 자체에 괄호로 된
+        # 안내 문구가 바로 붙어 있는 문서가 있다. 그 안내 문구가 "회사명"보다
+        # 먼저 캡처되면 회사명 대신 안내 문구가 그대로 들어가 버리므로, 이런
+        # 경우는 건너뛰고 다음 레이블("회사명")에서 실제 값을 찾는다. 단,
+        # "(주)오공"처럼 회사명 자체가 짧은 법인 표기("(주)"/"(유)"/"(사)" 등,
+        # 괄호 안에 공백이 없음)로 시작하는 정상적인 경우까지 걸러내면 안 되므로,
+        # 괄호 안에 공백이 있어 여러 단어로 된 문장처럼 보일 때만 안내 문구로
+        # 판단한다.
+        looks_like_note = bool(re.match(r"^\([^)]*\s[^)]*\)", val))
+        if val and not looks_like_note:
             supplier_name = val
             break
     supplier_address = _capture_after_label(section1, r"주\s*소", max_chars=120, extra_stop=_SUPPLIER_FIELD_STOP)
@@ -429,7 +457,7 @@ def _extract_coded_statements(text, code_re, max_chars=150):
         period_m = re.search(r"[.!?]", window)
         marker_m = re.search(
             rf"(?:(?<![가-힣])[{_ORDINAL_CHARS}]\)|\d+\)|\d+(?:\.\d+)+|[HP]\d{{3}}|"
-            r"예방조치\s*문구|응급조치요령|<[가-힣]+>|○)", window
+            rf"예방조치\s*문구|응급조치요령|유해{SEP}?\s*위험\s*문구|<[가-힣]+>|○)", window
         )
         candidates = [c.end() if c is period_m else c.start() for c in (period_m, marker_m) if c]
         desc = window[:min(candidates)] if candidates else window
@@ -769,6 +797,18 @@ def _parse_exposure_controls(section8):
 # 파일명 기반 제품명 추출
 # --------------------------------------------------------------------------
 
+def _strip_leading_composition_name(text, names):
+    """일부 문서는 성분별로 항목을 반복 나열하는 서식이라, 레이블 바로 뒤에
+    콜론 없이 곧장 "성분명 <내용>" 형태로 첫 성분의 내용이 이어진다. 그러면
+    구성성분표에서 이미 확인된 이름이 실제 내용 앞에 그대로 섞여 캡처된다
+    (예: "이산화티타늄 노출되는 입자상 물질의..."). 캡처된 값이 알려진 성분명
+    +공백으로 시작하면, 그 이름은 내용이 아니라 표 나열의 흔적이므로 지운다."""
+    for name in names:
+        if name and text.startswith(name + " "):
+            return text[len(name):].lstrip()
+    return text
+
+
 _FILENAME_PRODUCT_RE = re.compile(r"MSDS\s*\(([^)]+)\)", re.IGNORECASE)
 
 
@@ -810,5 +850,13 @@ def parse_msds(pdf_path):
     data.handling_storage = _parse_handling_storage(sections.get(7, ""))
     data.exposure_controls = _parse_exposure_controls(sections.get(8, ""))
     data.revision_date = revision_date
+
+    comp_names = sorted((n for n, _, _ in data.composition if n), key=len, reverse=True)
+    if comp_names:
+        for d in (data.firefighting, data.exposure_controls):
+            for k, v in d.items():
+                d[k] = _strip_leading_composition_name(v, comp_names)
+        for k, v in data.accidental_release.items():
+            data.accidental_release[k] = _strip_leading_composition_name(v, comp_names)
 
     return data

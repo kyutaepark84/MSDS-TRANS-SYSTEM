@@ -145,6 +145,19 @@ function extractFlatText(pages) {
   // 가능성이 높다. 그대로 두면 문장이 거기서 끊긴 것으로 오인해 뒷부분이
   // 잘려나가므로, 쉼표로 바꿔 하나로 이어지는 문장으로 취급한다.
   flat = flat.replace(/(?<=[가-힣])\.(?=[가-힣])/g, ", ");
+  // 일부 문서는 "특정표적장기" 등 세부 내용을 채우지 않고 "(...)" 같은
+  // 말줄임표 자리표시자만 남겨둔다(예: "신체 중 (...)에 손상을 일으킬 수
+  // 있음"). 그대로 두면 뒤에서 문장 종결(마침표) 판정 시 이 자리표시자 안의
+  // 점을 문장이 끝난 것으로 오인해 "신체 중 (."처럼 중간에서 잘려나간다.
+  // 자리표시자를 통째로 지우고, 바로 뒤에 조사 한 글자가 남아있으면 앞
+  // 단어에 그대로 붙여(공백 없이) "중 (...)에" -> "중에"처럼 자연스럽게
+  // 잇는다. 조사가 없는 경우는 그냥 지우고 남은 중복 공백만 정리한다.
+  flat = flat.replace(
+    /([가-힣]+)\s*\(\s*\.{2,}\s*\)\s*([은는이가을를에로와과의도만])(?=\s|$)/g,
+    "$1$2"
+  );
+  flat = flat.replace(/\s*\(\s*\.{2,}\s*\)\s*/g, " ");
+  flat = flat.replace(/ +/g, " ").trim();
   return { flat, revisionDate };
 }
 
@@ -206,7 +219,13 @@ function captureAfterLabel(text, labelPattern, maxChars = 150, extraStop = null)
     break;
   }
   end = Math.min(end, contentStart + maxChars);
-  return rest.slice(contentStart, end).trim();
+  let captured = rest.slice(contentStart, end).trim();
+  // 2단 표 레이아웃이 한 줄로 뭉개지며 순서가 꼬인 문서는, 실제 내용이
+  // 시작하기 전 부분이 다른 곳으로 밀려나고 "및"/"또는" 같은 접속사만
+  // 캡처의 맨 앞에 덩그러니 남기도 한다. 접속사로 시작하는 문장은 있을 수
+  // 없으므로(그 앞에 이어지던 내용이 잘려나갔다는 신호), 지운다.
+  captured = captured.replace(/^(?:및|또는)\s+/, "");
+  return captured;
 }
 
 // 문장 부호 기준으로 최대 maxSentences개까지만 취하고, 그 안에 포함된 문장은
@@ -294,7 +313,16 @@ function parseSection1(section1) {
   let supplierName = "";
   for (const label of ["제조자\\s*정보", "회사명"]) {
     const val = captureAfterLabel(section1, label, 150, _SUPPLIER_FIELD_STOP);
-    if (val) {
+    // "제조자 정보(수입품의 경우 ... 기재)"처럼, 레이블 자체에 괄호로 된
+    // 안내 문구가 바로 붙어 있는 문서가 있다. 그 안내 문구가 "회사명"보다
+    // 먼저 캡처되면 회사명 대신 안내 문구가 그대로 들어가 버리므로, 이런
+    // 경우는 건너뛰고 다음 레이블("회사명")에서 실제 값을 찾는다. 단,
+    // "(주)오공"처럼 회사명 자체가 짧은 법인 표기("(주)"/"(유)"/"(사)" 등,
+    // 괄호 안에 공백이 없음)로 시작하는 정상적인 경우까지 걸러내면 안 되므로,
+    // 괄호 안에 공백이 있어 여러 단어로 된 문장처럼 보일 때만 안내 문구로
+    // 판단한다.
+    const looksLikeNote = /^\([^)]*\s[^)]*\)/.test(val);
+    if (val && !looksLikeNote) {
       supplierName = val;
       break;
     }
@@ -375,7 +403,7 @@ function extractCodedStatements(text, codeRe, maxChars = 150) {
     const win = desc.slice(0, 90);
     const periodM = /[.!?]/.exec(win);
     const markerRe = new RegExp(
-      `(?:(?<![가-힣])[${_ORDINAL_CHARS}]\\)|\\d+\\)|\\d+(?:\\.\\d+)+|[HP]\\d{3}|예방조치\\s*문구|응급조치요령|<[가-힣]+>|○)`
+      `(?:(?<![가-힣])[${_ORDINAL_CHARS}]\\)|\\d+\\)|\\d+(?:\\.\\d+)+|[HP]\\d{3}|예방조치\\s*문구|응급조치요령|유해${SEP}?\\s*위험\\s*문구|<[가-힣]+>|○)`
     );
     const markerM = markerRe.exec(win);
     const candidates = [];
@@ -634,6 +662,20 @@ function parseComposition(section3, productName = "") {
 // 파일명 기반 제품명 추출
 // --------------------------------------------------------------------------
 
+// 일부 문서는 성분별로 항목을 반복 나열하는 서식이라, 레이블 바로 뒤에 콜론
+// 없이 곧장 "성분명 <내용>" 형태로 첫 성분의 내용이 이어진다. 그러면
+// 구성성분표에서 이미 확인된 이름이 실제 내용 앞에 그대로 섞여 캡처된다
+// (예: "이산화티타늄 노출되는 입자상 물질의..."). 캡처된 값이 알려진 성분명
+// +공백으로 시작하면, 그 이름은 내용이 아니라 표 나열의 흔적이므로 지운다.
+function stripLeadingCompositionName(text, names) {
+  for (const name of names) {
+    if (name && text.startsWith(`${name} `)) {
+      return text.slice(name.length).trimStart();
+    }
+  }
+  return text;
+}
+
 const _FILENAME_PRODUCT_RE = /MSDS\s*\(([^)]+)\)/i;
 
 // 업로드된 MSDS 파일명이 "...MSDS(제품명)..." 형식을 따르는 경우, 괄호 안의
@@ -792,6 +834,18 @@ function parseMsds(pages, sourceFilename = "") {
   data.handlingStorage = parseHandlingStorage(sections[7] || "");
   data.exposureControls = parseExposureControls(sections[8] || "");
   data.revisionDate = revisionDate;
+
+  const compNames = data.composition.map(([n]) => n).filter(Boolean).sort((a, b) => b.length - a.length);
+  if (compNames.length) {
+    for (const d of [data.firefighting, data.exposureControls]) {
+      for (const k of Object.keys(d)) {
+        d[k] = stripLeadingCompositionName(d[k], compNames);
+      }
+    }
+    for (const k of Object.keys(data.accidentalRelease)) {
+      data.accidentalRelease[k] = stripLeadingCompositionName(data.accidentalRelease[k], compNames);
+    }
+  }
 
   return data;
 }
