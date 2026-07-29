@@ -119,10 +119,19 @@ def _estimate_text_width_emu(text, size_pt):
 TITLE_MAX_FONT_PT = 36
 TITLE_MIN_FONT_PT = 20
 
+# 현장경고표지(독립 도형, bodyPr lIns/rIns)와 관리요령(표 셀, tcPr marL/marR)의
+# 제목 상자는 여백 방식이 달라 실제 사용 가능 폭이 서로 다르다(약 87000 EMU
+# 차이). 이 차이 때문에 같은 제품명인데도 두 슬라이드의 제목 크기가 1pt씩
+# 어긋나는 경우가 있어, 항상 더 좁은 쪽(현장경고표지) 기준으로 통일한다.
+TITLE_CANONICAL_USABLE_WIDTH_EMU = 6271560
+
 
 def _fit_title_font(text, usable_width_emu):
     """제목은 항상 한 줄로 표시한다. 36pt로 상자 폭에 안 들어가는(제품명이
-    길거나 영문+한글이 병기된) 경우, 20pt까지 줄여 한 줄을 유지한다."""
+    길거나 영문+한글이 병기된) 경우, 20pt까지 줄여 한 줄을 유지한다.
+    현장경고표지와 관리요령의 제목 크기를 항상 일치시키기 위해, 두 상자 중
+    더 좁은 쪽(TITLE_CANONICAL_USABLE_WIDTH_EMU)을 기준으로 계산한다."""
+    usable_width_emu = min(usable_width_emu, TITLE_CANONICAL_USABLE_WIDTH_EMU)
     for font_pt in range(TITLE_MAX_FONT_PT, TITLE_MIN_FONT_PT - 1, -1):
         if _estimate_text_width_emu(text, font_pt) <= usable_width_emu:
             return font_pt
@@ -420,7 +429,21 @@ def build_handling_slide(msds, out_path, template_path=HANDLING_TEMPLATE):
     if overflow > 0:
         table_shape.top -= overflow
 
-    _set_paragraph_text(tbl.cell(0, 0).text_frame._txBody.find(qn("a:p")), msds.product_name)
+    # 제목: 현장경고표지와 동일하게, 제품명 길이에 맞춰 36pt~20pt 사이에서
+    # 동적으로 크기를 정한다(예전에는 여기만 28pt 고정이라, 같은 제품명이라도
+    # 현장경고표지와 관리요령의 제목 크기가 서로 달라 보이는 문제가 있었다).
+    title_p = tbl.cell(0, 0).text_frame._txBody.find(qn("a:p"))
+    _set_paragraph_text(title_p, msds.product_name)
+    title_tcPr = tbl.cell(0, 0)._tc.find(qn("a:tcPr"))
+    title_l_ins = int(title_tcPr.get("marL", "91440")) if title_tcPr is not None else 91440
+    title_r_ins = int(title_tcPr.get("marR", "91440")) if title_tcPr is not None else 91440
+    title_usable_width = table_shape.width - title_l_ins - title_r_ins
+    title_font_pt = _fit_title_font(msds.product_name, title_usable_width)
+    for r in title_p.findall(qn("a:r")):
+        rPr = r.find(qn("a:rPr"))
+        if rPr is not None:
+            rPr.set("sz", str(int(title_font_pt * 100)))
+            rPr.set("b", "1")
 
     row_lines = {
         2: _hazard_bullets(msds.hazard_statements, msds.classification),

@@ -151,6 +151,10 @@ function replaceParagraphs(txBody, lines, templateIndex = 0) {
 const EMU_PER_PT = 12700;
 const TITLE_MAX_FONT_PT = 36;
 const TITLE_MIN_FONT_PT = 20;
+// 현장경고표지(독립 도형, bodyPr lIns/rIns)와 관리요령(표 셀, tcPr marL/marR)의
+// 제목 상자는 여백 방식이 달라 실제 사용 가능 폭이 서로 다르다. 두 슬라이드의
+// 제목 크기를 항상 일치시키기 위해, 더 좁은 쪽(현장경고표지) 기준으로 통일한다.
+const TITLE_CANONICAL_USABLE_WIDTH_EMU = 6271560;
 const WIDE_CHAR_EXTRA = new Set([0x203b, 0x260e, 0x2605, 0x2606, 0x2600]);
 
 function isWideChar(ch) {
@@ -180,6 +184,7 @@ function estimateTextWidthEmu(text, sizePt) {
 // 제목은 항상 한 줄로 표시한다. 36pt로 상자 폭에 안 들어가는(제품명이 길거나
 // 영문+한글이 병기된) 경우, 20pt까지 줄여 한 줄을 유지한다.
 function fitTitleFont(text, usableWidthEmu) {
+  usableWidthEmu = Math.min(usableWidthEmu, TITLE_CANONICAL_USABLE_WIDTH_EMU);
   for (let fontPt = TITLE_MAX_FONT_PT; fontPt >= TITLE_MIN_FONT_PT; fontPt--) {
     if (estimateTextWidthEmu(text, fontPt) <= usableWidthEmu) return fontPt;
   }
@@ -479,7 +484,25 @@ async function buildHandlingSlide(msds) {
     off0.setAttribute("y", String(tableTop0 - overflow0));
   }
 
-  setParagraphText(firstEl(firstEl(cellsOf(0)[0], NS.a, "txBody"), NS.a, "p"), msds.productName);
+  // 제목: 현장경고표지와 동일하게, 제품명 길이에 맞춰 36pt~20pt 사이에서
+  // 동적으로 크기를 정한다(예전에는 여기만 28pt 고정이라, 같은 제품명이라도
+  // 현장경고표지와 관리요령의 제목 크기가 서로 달라 보이는 문제가 있었다).
+  const titleTxBody = firstEl(cellsOf(0)[0], NS.a, "txBody");
+  const titleP = firstEl(titleTxBody, NS.a, "p");
+  setParagraphText(titleP, msds.productName);
+  const titleTcPr = firstEl(cellsOf(0)[0], NS.a, "tcPr");
+  const titleLIns = parseInt((titleTcPr && titleTcPr.getAttribute("marL")) || "91440", 10);
+  const titleRIns = parseInt((titleTcPr && titleTcPr.getAttribute("marR")) || "91440", 10);
+  const titleTableWidth = parseInt(ext0.getAttribute("cx"), 10);
+  const titleUsableWidth = titleTableWidth - titleLIns - titleRIns;
+  const titleFontPt = fitTitleFont(msds.productName, titleUsableWidth);
+  for (const r of allEls(titleP, NS.a, "r")) {
+    const rPr = firstEl(r, NS.a, "rPr");
+    if (rPr) {
+      rPr.setAttribute("sz", String(Math.round(titleFontPt * 100)));
+      rPr.setAttribute("b", "1");
+    }
+  }
 
   const rowLinesMap = {
     2: hazardBulletsForHandling(msds.hazardStatements, msds.classification),
