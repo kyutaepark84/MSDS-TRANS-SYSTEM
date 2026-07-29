@@ -23,7 +23,7 @@ const SECTION_TITLE_PATTERNS = {
   5: `폭발\\s*${SEP}?\\s*화재\\s*시\\s*대처\\s*방법`,
   6: "누출\\s*사고\\s*시\\s*대처\\s*방법",
   7: "취급\\s*및\\s*저장\\s*(?:방법|밥법)", // 원본에 "방법"이 "밥법"으로 오타난 문서가 있음
-  8: "노출\\s*방지\\s*및\\s*개인\\s*보호구",
+  8: "노출\\s*방지\\s*(?:및\\s*)?개인\\s*보호구", // "및"이 빠진 문서가 있음
   9: `물리\\s*${SEP}?\\s*화학적\\s*특(?:성|징)`,
   10: "안(?:정|전)성\\s*및\\s*반응성", // "안전성"으로 오타난 문서가 있음(안정성이 맞음)
   11: "독성에\\s*관한\\s*정보",
@@ -166,7 +166,11 @@ function splitSections(flatText) {
   let expected = 1;
   let pos = 0;
   while (expected <= 16) {
-    const pat = new RegExp(`${expected}\\.\\s*${SECTION_TITLE_PATTERNS[expected]}`);
+    // 일부 문서는 항목 번호 바로 뒤, 실제 제목이 시작하기 전에 장식용
+    // 기호(가운뎃점, 슬래시, 또는 그 자리에서 추출된 PUA 코드)가 하나 더
+    // 붙어 있다(예: "2. ·유해성위험성", "8. /노출방지개인보호구"). 제목
+    // 매칭 자체가 막히지 않도록 그런 장식 기호 하나는 건너뛴다.
+    const pat = new RegExp(`${expected}\\.\\s*[·ㆍ•・∙/-]?\\s*${SECTION_TITLE_PATTERNS[expected]}`);
     const m = pat.exec(flatText.slice(pos));
     if (!m) break;
     boundaries.push([pos + m.index, expected]);
