@@ -26,8 +26,14 @@ ARROW = "▶"    # ▶
 
 # 표에 넣을 최대 항목 수(칸이 고정 크기라 너무 많으면 넘칠 수 있음)
 MAX_PREVENTION_ITEMS = 8
+MAX_RESPONSE_ITEMS = 6
+MAX_STORAGE_ITEMS = 3
+MAX_DISPOSAL_ITEMS = 3
 MAX_HANDLING_BULLETS = 4
 MAX_HAZARD_BULLETS = 8
+PRECAUTION_MAX_FONT_PT = 13
+PRECAUTION_MIN_FONT_PT = 9
+_PRECAUTION_LINE_HEIGHT_FACTOR = 1.2
 
 
 # --------------------------------------------------------------------------
@@ -260,15 +266,37 @@ def _place_pictogram_row_in_cell(slide, cell_left, cell_top, cell_width, cell_he
 # --------------------------------------------------------------------------
 
 def _select_precaution_lines(precaution):
+    """예방/대응/저장/폐기 네 그룹 모두에서 주요 내용을 발췌한다. 그룹별로
+    한 건만 취하면(과거 방식) 대응 그룹처럼 항목이 많은 경우 눈·피부·흡입 등
+    서로 다른 노출 경로에 대한 대응 문구가 대부분 빠지므로, 그룹별로 여러
+    건을 담되(칸 크기에 맞춰 아래에서 글자 크기를 조정) 상한을 둬 과도하게
+    길어지지 않게 한다."""
     lines = []
     for code, desc in precaution.get("prevention", [])[:MAX_PREVENTION_ITEMS]:
         lines.append(f"{BULLET} {desc}")
-    for group in ("response", "storage", "disposal"):
-        items = precaution.get(group, [])
-        if items:
-            code, desc = items[0]
+    group_caps = (
+        ("response", MAX_RESPONSE_ITEMS),
+        ("storage", MAX_STORAGE_ITEMS),
+        ("disposal", MAX_DISPOSAL_ITEMS),
+    )
+    for group, cap in group_caps:
+        for code, desc in precaution.get(group, [])[:cap]:
             lines.append(f"{BULLET} {desc}")
     return lines
+
+
+def _fit_precaution_font(lines, usable_width_emu, usable_height_emu):
+    """예방조치 문구 칸은 높이가 고정(noAutofit)이라, 그룹별로 여러 건을
+    담으면(위 _select_precaution_lines) 13pt 그대로는 넘칠 수 있다. 관리요령
+    표와 같은 방식으로, 넘치지 않는 한도 안에서 가장 큰 글자 크기를 고른다."""
+    if not lines:
+        return PRECAUTION_MAX_FONT_PT
+    for font_pt in range(PRECAUTION_MAX_FONT_PT, PRECAUTION_MIN_FONT_PT - 1, -1):
+        total_lines = sum(_wrapped_line_count(line, font_pt, usable_width_emu) for line in lines)
+        needed_height = total_lines * font_pt * _PRECAUTION_LINE_HEIGHT_FACTOR * EMU_PER_PT
+        if needed_height <= usable_height_emu:
+            return font_pt
+    return PRECAUTION_MIN_FONT_PT
 
 
 _WS_RE = re.compile(r"\s+")
@@ -387,7 +415,24 @@ def build_label_slide(msds, out_path, template_path=LABEL_TEMPLATE):
     hazard_lines = [f"{BULLET} {desc}" for code, desc in msds.hazard_statements[:MAX_HAZARD_BULLETS]]
     _replace_paragraphs(tbl.cell(0, 1).text_frame._txBody, hazard_lines)
     precaution_lines = _select_precaution_lines(msds.precaution)
-    _replace_paragraphs(tbl.cell(1, 1).text_frame._txBody, precaution_lines)
+    precaution_cell = tbl.cell(1, 1)
+    _replace_paragraphs(precaution_cell.text_frame._txBody, precaution_lines)
+    # 예방/대응/저장/폐기 네 그룹 모두에서 발췌하다 보니(위 _select_precaution_lines)
+    # 항목이 많은 문서에서는 칸 높이가 고정된 13pt로 넘칠 수 있어, 관리요령
+    # 표와 같은 방식으로 넘치지 않는 선에서 글자 크기를 줄인다.
+    precaution_bodyPr = precaution_cell.text_frame._txBody.find(qn("a:bodyPr"))
+    p_t_ins = int(precaution_bodyPr.get("tIns", "45720")) if precaution_bodyPr is not None else 45720
+    p_b_ins = int(precaution_bodyPr.get("bIns", "45720")) if precaution_bodyPr is not None else 45720
+    p_l_ins = int(precaution_bodyPr.get("lIns", "91440")) if precaution_bodyPr is not None else 91440
+    p_r_ins = int(precaution_bodyPr.get("rIns", "91440")) if precaution_bodyPr is not None else 91440
+    precaution_usable_width = tbl.columns[1].width - p_l_ins - p_r_ins
+    precaution_usable_height = tbl.rows[1].height - p_t_ins - p_b_ins
+    precaution_font_pt = _fit_precaution_font(precaution_lines, precaution_usable_width, precaution_usable_height)
+    for p in precaution_cell.text_frame._txBody.findall(qn("a:p")):
+        for r in p.findall(qn("a:r")):
+            rPr = r.find(qn("a:rPr"))
+            if rPr is not None:
+                rPr.set("sz", str(int(precaution_font_pt * 100)))
 
     # 그림문자
     pic_names = {s.name for s in slide.shapes if s.shape_type == MSO_SHAPE_TYPE.PICTURE}

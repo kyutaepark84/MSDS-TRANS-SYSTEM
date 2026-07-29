@@ -16,9 +16,15 @@ const NS = {
 const BULLET = "▪";
 const ARROW = "▶";
 const MAX_PREVENTION_ITEMS = 8;
+const MAX_RESPONSE_ITEMS = 6;
+const MAX_STORAGE_ITEMS = 3;
+const MAX_DISPOSAL_ITEMS = 3;
 const MAX_HANDLING_BULLETS = 4;
 const MAX_HAZARD_BULLETS = 8;
 const MAX_PICTOGRAMS_WEB = 3;
+const PRECAUTION_MAX_FONT_PT = 13;
+const PRECAUTION_MIN_FONT_PT = 9;
+const PRECAUTION_LINE_HEIGHT_FACTOR = 1.2;
 // 관리요령 템플릿(handling_template.pptx)의 실제 슬라이드 높이(EMU). 표의
 // 실제 높이가 이보다 조금 더 커서 맨 아래 행 일부가 인쇄 가능 영역을
 // 벗어나 있어, 표를 위로 살짝 올려 보정하는 데 사용한다.
@@ -312,16 +318,35 @@ function applyPictogramSlotsCentered(doc, zip, slots, codes, cellLeft, cellTop, 
 // 유해・예방조치 문구 선택
 // --------------------------------------------------------------------------
 
+// 예방/대응/저장/폐기 네 그룹 모두에서 주요 내용을 발췌한다. 그룹별로 한
+// 건만 취하면(과거 방식) 대응 그룹처럼 항목이 많은 경우 눈·피부·흡입 등
+// 서로 다른 노출 경로에 대한 대응 문구가 대부분 빠지므로, 그룹별로 여러
+// 건을 담되(칸 크기에 맞춰 아래에서 글자 크기를 조정) 상한을 둔다.
 function selectPrecautionLines(precaution) {
   const lines = [];
   for (const [, desc] of (precaution.prevention || []).slice(0, MAX_PREVENTION_ITEMS)) {
     lines.push(`${BULLET} ${desc}`);
   }
-  for (const group of ["response", "storage", "disposal"]) {
-    const items = precaution[group] || [];
-    if (items.length) lines.push(`${BULLET} ${items[0][1]}`);
+  const groupCaps = [["response", MAX_RESPONSE_ITEMS], ["storage", MAX_STORAGE_ITEMS], ["disposal", MAX_DISPOSAL_ITEMS]];
+  for (const [group, cap] of groupCaps) {
+    for (const [, desc] of (precaution[group] || []).slice(0, cap)) {
+      lines.push(`${BULLET} ${desc}`);
+    }
   }
   return lines;
+}
+
+// 예방조치 문구 칸은 높이가 고정(noAutofit)이라, 그룹별로 여러 건을 담으면
+// 13pt 그대로는 넘칠 수 있다. 관리요령 표와 같은 방식으로, 넘치지 않는
+// 한도 안에서 가장 큰 글자 크기를 고른다.
+function fitPrecautionFont(lines, usableWidthEmu, usableHeightEmu) {
+  if (!lines.length) return PRECAUTION_MAX_FONT_PT;
+  for (let fontPt = PRECAUTION_MAX_FONT_PT; fontPt >= PRECAUTION_MIN_FONT_PT; fontPt--) {
+    const totalLines = lines.reduce((sum, line) => sum + wrappedLineCount(line, fontPt, usableWidthEmu), 0);
+    const needed = totalLines * fontPt * PRECAUTION_LINE_HEIGHT_FACTOR * EMU_PER_PT;
+    if (needed <= usableHeightEmu) return fontPt;
+  }
+  return PRECAUTION_MIN_FONT_PT;
 }
 
 function normalizeWs(text) {
@@ -459,7 +484,28 @@ async function buildLabelSlide(msds) {
   const hazardLines = msds.hazardStatements.slice(0, MAX_HAZARD_BULLETS).map(([, desc]) => `${BULLET} ${desc}`);
   replaceParagraphs(firstEl(row0Cells[1], NS.a, "txBody"), hazardLines);
   const precautionLines = selectPrecautionLines(msds.precaution);
-  replaceParagraphs(firstEl(row1Cells[1], NS.a, "txBody"), precautionLines);
+  const precautionTxBody = firstEl(row1Cells[1], NS.a, "txBody");
+  replaceParagraphs(precautionTxBody, precautionLines);
+  // 예방/대응/저장/폐기 네 그룹 모두에서 발췌하다 보니(위 selectPrecautionLines)
+  // 항목이 많은 문서에서는 칸 높이가 고정된 13pt로 넘칠 수 있어, 관리요령
+  // 표와 같은 방식으로 넘치지 않는 선에서 글자 크기를 줄인다.
+  const precautionBodyPr = firstEl(precautionTxBody, NS.a, "bodyPr");
+  const pTIns = parseInt((precautionBodyPr && precautionBodyPr.getAttribute("tIns")) || "45720", 10);
+  const pBIns = parseInt((precautionBodyPr && precautionBodyPr.getAttribute("bIns")) || "45720", 10);
+  const pLIns = parseInt((precautionBodyPr && precautionBodyPr.getAttribute("lIns")) || "91440", 10);
+  const pRIns = parseInt((precautionBodyPr && precautionBodyPr.getAttribute("rIns")) || "91440", 10);
+  const gridColsForPrecaution = allEls(firstEl(tbl, NS.a, "tblGrid"), NS.a, "gridCol");
+  const precautionColWidth = parseInt(gridColsForPrecaution[1].getAttribute("w"), 10);
+  const precautionUsableWidth = precautionColWidth - pLIns - pRIns;
+  const precautionRowHeight = parseInt(rows[1].getAttribute("h"), 10);
+  const precautionUsableHeight = precautionRowHeight - pTIns - pBIns;
+  const precautionFontPt = fitPrecautionFont(precautionLines, precautionUsableWidth, precautionUsableHeight);
+  for (const p of allEls(row1Cells[1], NS.a, "p")) {
+    for (const r of allEls(p, NS.a, "r")) {
+      const rPr = firstEl(r, NS.a, "rPr");
+      if (rPr) rPr.setAttribute("sz", String(Math.round(precautionFontPt * 100)));
+    }
+  }
 
   // 그림문자
   const codes = pictogramsForHcodes(msds.hazardStatements.map(([c]) => c));
