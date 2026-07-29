@@ -82,13 +82,7 @@ def _txbody_of(shape_or_cell):
     return shape_or_cell.text_frame._txBody
 
 
-# --------------------------------------------------------------------------
-# 공급자 정보 자동 줄맞춤(최소 10pt, 1줄이 안 되면 2줄)
-# --------------------------------------------------------------------------
-
 EMU_PER_PT = 12700
-FOOTER_MAX_FONT_PT = 12
-FOOTER_MIN_FONT_PT = 10
 # ※ ☎ ★ ☆ ☀ 등 한글 문서에서 흔히 쓰이는 전각 기호 + 한글 음절/자모/한자 범위
 _WIDE_CHAR_EXTRA = {0x203B, 0x260E, 0x2605, 0x2606, 0x2600}
 
@@ -118,91 +112,21 @@ def _estimate_text_width_emu(text, size_pt):
     return width_em * size_pt * EMU_PER_PT
 
 
-def _fit_footer_lines(address, company, phone, available_width_emu):
-    """전체 문구가 available_width_emu 안에 최대(12pt)~최소(10pt) 크기로 한 줄에
-    들어가면 그 크기의 한 줄로, 10pt에서도 안 들어가면 두 줄로 나눈다. 전화번호가
-    혼자 한 줄을 차지하지 않도록, 우선 회사명과 같은 줄에 붙여본다(그래도 안
-    맞으면 전화번호만 따로 뺀다). 항상 10pt 이상을 유지한다."""
-    full = f"※ 공급자 정보 : {address}  {company} ☎ {phone}"
-    for size in range(FOOTER_MAX_FONT_PT, FOOTER_MIN_FONT_PT - 1, -1):
-        if _estimate_text_width_emu(full, size) <= available_width_emu:
-            return [full], size
-
-    size = FOOTER_MIN_FONT_PT
-    candidates = [
-        (f"※ 공급자 정보 : {address}", f"{company}  ☎ {phone}"),
-        (f"※ 공급자 정보 : {address}  {company}", f"☎ {phone}"),
-    ]
-    for line1, line2 in candidates:
-        if (_estimate_text_width_emu(line1, size) <= available_width_emu
-                and _estimate_text_width_emu(line2, size) <= available_width_emu):
-            return [line1, line2], size
-    # 둘 다 안 맞아도(주소가 극단적으로 긴 경우) 최소 크기로 최선의 후보를 사용
-    return list(candidates[0]), size
-
-
-def _set_footer_text(shape, lines, size_pt, max_bottom=None):
-    """자동 축소(normAutofit)를 끄고 지정한 크기를 그대로 적용한다. 두 줄이 되어
-    글상자 높이를 늘려야 할 때는 아래쪽 경계(max_bottom, 보통 라벨 바깥 굵은
-    테두리 선의 y좌표)를 넘지 않도록 위쪽으로만 확장한다."""
-    txBody = _txbody_of(shape)
-    bodyPr = txBody.find(qn("a:bodyPr"))
-    for tag in ("a:normAutofit", "a:spAutoFit"):
-        el = bodyPr.find(qn(tag))
-        if el is not None:
-            bodyPr.remove(el)
-    if bodyPr.find(qn("a:noAutofit")) is None:
-        bodyPr.append(bodyPr.makeelement(qn("a:noAutofit"), {}))
-
-    t_ins = int(bodyPr.get("tIns", "45720"))
-    b_ins = int(bodyPr.get("bIns", "45720"))
-
-    _replace_paragraphs(txBody, lines)
-    for p in txBody.findall(qn("a:p")):
-        for r in p.findall(qn("a:r")):
-            rPr = r.find(qn("a:rPr"))
-            if rPr is not None:
-                rPr.set("sz", str(int(size_pt * 100)))
-
-    needed_height = int(len(lines) * size_pt * 1.2 * EMU_PER_PT) + t_ins + b_ins
-    if needed_height > shape.height:
-        bottom = shape.top + shape.height
-        if max_bottom is not None:
-            bottom = min(bottom, max_bottom)
-        shape.height = needed_height
-        shape.top = bottom - needed_height
-
-
 # --------------------------------------------------------------------------
-# 제품명 + 성분 목록 글상자 자동 축소
+# 제목 글상자 자동 축소
 # --------------------------------------------------------------------------
 
-TITLE_FIXED_FONT_PT = 36
-COMPOSITION_MAX_FONT_PT = 12
-COMPOSITION_MIN_FONT_PT = 8
-_LINE_HEIGHT_FACTOR = 1.2
-# 그림문자(그림)와 상자 사이에 남겨 둘 최소 여백.
-PICTOGRAM_GAP_EMU = 50000
+TITLE_MAX_FONT_PT = 36
+TITLE_MIN_FONT_PT = 20
 
 
-def _fit_label_composition_size(n_rows, t_ins, b_ins, top_gap_emu, max_height_emu, title_lines=1):
-    """제목(36pt 고정) + 성분 목록이 상자 높이 안에 들어가도록 성분 목록
-    글자 크기와 상자에 필요한 높이를 정한다. 상자는 세로 가운데 정렬(anchor=ctr)
-    이라 내용이 길어지면 위/아래로 넘쳐 인쇄 서식 경계(제목 위쪽 테두리, 그림문자
-    영역)를 넘어갈 수 있어, 성분 목록 글자 크기부터 줄이고 그래도 안 맞으면
-    상자 높이를(그림문자와 겹치지 않는 한도까지) 늘린다. 제품명이 길어 제목이
-    여러 줄로 줄바꿈되는 경우, title_lines로 그 줄 수를 반영해야 높이 계산이
-    맞다(1줄로 가정하면 실제로 2줄 이상 넘칠 때 다시 테두리를 침범한다)."""
-    title_height_factor = TITLE_FIXED_FONT_PT * title_lines
-    for content_pt in range(COMPOSITION_MAX_FONT_PT, COMPOSITION_MIN_FONT_PT - 1, -1):
-        needed = (_LINE_HEIGHT_FACTOR * (title_height_factor + content_pt * n_rows) * EMU_PER_PT
-                  + t_ins + b_ins + 2 * top_gap_emu)
-        if needed <= max_height_emu:
-            return content_pt, needed
-    content_pt = COMPOSITION_MIN_FONT_PT
-    needed = (_LINE_HEIGHT_FACTOR * (title_height_factor + content_pt * n_rows) * EMU_PER_PT
-              + t_ins + b_ins + 2 * top_gap_emu)
-    return content_pt, min(needed, max_height_emu)
+def _fit_title_font(text, usable_width_emu):
+    """제목은 항상 한 줄로 표시한다. 36pt로 상자 폭에 안 들어가는(제품명이
+    길거나 영문+한글이 병기된) 경우, 20pt까지 줄여 한 줄을 유지한다."""
+    for font_pt in range(TITLE_MAX_FONT_PT, TITLE_MIN_FONT_PT - 1, -1):
+        if _estimate_text_width_emu(text, font_pt) <= usable_width_emu:
+            return font_pt
+    return TITLE_MIN_FONT_PT
 
 
 # --------------------------------------------------------------------------
@@ -217,26 +141,6 @@ def _remove_pictures(slide, names):
 
 MAX_PICTOGRAMS = 6  # 동시에 표시할 그림문자 최대 개수(실제 GHS 라벨에서 5개 이상
                      # 동시 적용은 드묾). 그 이상은 우선순위(GHS01→GHS09) 상위만 표시.
-
-
-def _place_pictogram_row(slide, slide_width, codes, band_left, band_top, max_size, gap=Emu(150000)):
-    codes = codes[:MAX_PICTOGRAMS]
-    n = len(codes)
-    if n == 0:
-        return
-    band_width = slide_width - 2 * band_left
-    # 아이콘이 template 원본(최대 3개칸)보다 많아지면 축소해서 같은 폭에 맞추되,
-    # 원래 크기의 45% 밑으로는 줄이지 않는다(그 이하로는 식별이 어려움 -> 여백을 조금 침범).
-    min_size = int(max_size) * 0.45
-    size = min(int(max_size), int((band_width - (n - 1) * gap) / n))
-    size = max(size, int(min_size))
-    total = n * size + (n - 1) * int(gap)
-    start_x = int(band_left + (band_width - total) / 2)
-    for i, code in enumerate(codes):
-        _, filename = ghs.PICTOGRAMS[code]
-        path = os.path.join(PICTOGRAM_DIR, filename)
-        x = start_x + i * (size + int(gap))
-        slide.shapes.add_picture(path, x, int(band_top), size, size)
 
 
 def _place_pictogram_row_in_cell(slide, cell_left, cell_top, cell_width, cell_height, codes,
@@ -335,112 +239,71 @@ def build_label_slide(msds, out_path, template_path=LABEL_TEMPLATE):
 
     shapes = {s.name: s for s in slide.shapes}
 
-    # 제품명 + 성분 목록
+    # 제목: 제품명만 표시한다(구성성분 목록은 별도 요청에 따라 삭제됨).
+    # 항상 한 줄로 유지하되, 제품명이 길면 최소 20pt까지 줄인다.
     rect14 = shapes["Rectangle 14"]
-    txBody = _txbody_of(rect14)
-    ps = txBody.findall(qn("a:p"))
-    title_p = ps[0]
+    txBody14 = _txbody_of(rect14)
+    title_p = txBody14.findall(qn("a:p"))[0]
     _set_paragraph_text(title_p, msds.product_name)
-    comp_template_idx = 1 if len(ps) > 1 else 0
-    comp_template = copy.deepcopy(ps[comp_template_idx])
-    for p in ps[1:]:
-        txBody.remove(p)
-    for name, cas, content in msds.composition:
-        new_p = copy.deepcopy(comp_template)
-        content_disp = content if content.endswith("%") else f"{content}%"
-        _set_paragraph_text(new_p, f"( CAS No. : {cas} ,  함유량 : {content_disp}) - {name}")
-        txBody.append(new_p)
-
-    # 상자가 세로 가운데 정렬이라, 성분이 많아 전체 내용이 길어지면 제목이
-    # 위쪽 테두리를 넘어가거나 아래쪽 그림문자와 겹칠 수 있다. 제목은 항상
-    # 36pt 굵게 고정하고, 성분 목록 글자 크기와 상자 높이를 성분 개수에 맞춰
-    # 다시 계산해 위쪽 테두리와 그림문자 사이 안에 들어오도록 한다.
-    bodyPr14 = txBody.find(qn("a:bodyPr"))
-    t_ins14 = int(bodyPr14.get("tIns", "45720"))
-    b_ins14 = int(bodyPr14.get("bIns", "45720"))
+    bodyPr14 = txBody14.find(qn("a:bodyPr"))
     l_ins14 = int(bodyPr14.get("lIns", "90000"))
     r_ins14 = int(bodyPr14.get("rIns", "90000"))
-    outline = shapes.get("Rectangle 2")
-    top_gap_emu = max(0, outline.top - rect14.top - t_ins14) if outline is not None else 0
-    pic_tops = [s.top for s in slide.shapes if s.shape_type == MSO_SHAPE_TYPE.PICTURE]
-    if pic_tops:
-        max_bottom = min(pic_tops) - PICTOGRAM_GAP_EMU
-        max_height = max(rect14.height, max_bottom - rect14.top)
-    else:
-        max_height = rect14.height
-    # 제품명이 길면(특히 영문 제품명) 36pt 고정 폭에 한 줄로 안 들어가 줄바꿈될
-    # 수 있다. 1줄로 가정하고 높이를 계산하면 실제로 2줄 이상이 될 때 다시
-    # 테두리를 침범하므로, 줄바꿈 예상 줄 수를 미리 추정해 반영한다.
     title_usable_width = rect14.width - l_ins14 - r_ins14
-    title_width = _estimate_text_width_emu(msds.product_name, TITLE_FIXED_FONT_PT)
-    title_lines = max(1, -(-title_width // title_usable_width)) if title_usable_width > 0 else 1
-    content_pt, required_height = _fit_label_composition_size(
-        len(msds.composition), t_ins14, b_ins14, top_gap_emu, max_height, title_lines=title_lines
-    )
-    if required_height > rect14.height:
-        rect14.height = int(required_height)
+    title_font_pt = _fit_title_font(msds.product_name, title_usable_width)
     for r in title_p.findall(qn("a:r")):
         rPr = r.find(qn("a:rPr"))
         if rPr is not None:
-            rPr.set("sz", str(int(TITLE_FIXED_FONT_PT * 100)))
+            rPr.set("sz", str(int(title_font_pt * 100)))
             rPr.set("b", "1")
-    for p in txBody.findall(qn("a:p"))[1:]:
-        for r in p.findall(qn("a:r")):
-            rPr = r.find(qn("a:rPr"))
-            if rPr is not None:
-                rPr.set("sz", str(int(content_pt * 100)))
+
+    # 표: [신호어 + 그림문자] / [유해ㆍ위험 문구] / [예방조치 문구] / [공급자 정보]
+    table_shape = next(s for s in slide.shapes if s.has_table)
+    tbl = table_shape.table
 
     # 신호어 (원본이 "신호어 : 해당없음"으로 명시한 문서는 실제로 GHS
     # 미분류 제품이라 신호어가 없는 것이 맞으므로, "경고"로 임의 대체하지
     # 않고 원본 값을 그대로(없으면 빈 칸으로) 반영한다.
-    rect15 = shapes["Rectangle 15"]
-    _set_paragraph_text(_txbody_of(rect15).find(qn("a:p")), msds.signal_word)
+    _set_paragraph_text(tbl.cell(0, 0).text_frame._txBody.find(qn("a:p")), msds.signal_word)
 
-    # 공급자 정보 (최소 10pt 유지, 한 줄에 안 맞으면 전화번호 앞에서 두 줄로)
-    rect16 = shapes["Rectangle 16"]
-    phone = (msds.supplier_phone or "").split(",")[0].strip()
-    bodyPr = _txbody_of(rect16).find(qn("a:bodyPr"))
-    l_ins = int(bodyPr.get("lIns", "91440"))
-    r_ins = int(bodyPr.get("rIns", "91440"))
-    available_width = rect16.width - l_ins - r_ins
-    footer_lines, footer_size = _fit_footer_lines(msds.supplier_address, msds.supplier_name, phone, available_width)
-    outline = shapes.get("Rectangle 2")
-    max_bottom = (outline.top + outline.height) if outline is not None else None
-    _set_footer_text(rect16, footer_lines, footer_size, max_bottom=max_bottom)
-
-    # 표: 유해ㆍ위험 문구 / 예방조치 문구
-    table_shape = next(s for s in slide.shapes if s.has_table)
-    tbl = table_shape.table
-    # 유해・위험문구는 H-code(예: H317)를 표기하지 않고 문장만 표시한다
     hazard_lines = [f"{BULLET} {desc}" for code, desc in msds.hazard_statements[:MAX_HAZARD_BULLETS]]
-    _replace_paragraphs(tbl.cell(0, 1).text_frame._txBody, hazard_lines)
     precaution_lines = _select_precaution_lines(msds.precaution)
-    precaution_cell = tbl.cell(1, 1)
-    _replace_paragraphs(precaution_cell.text_frame._txBody, precaution_lines)
-    # 예방/대응/저장/폐기 네 그룹 모두에서 발췌하다 보니(위 _select_precaution_lines)
-    # 항목이 많은 문서에서는 칸 높이가 고정된 13pt로 넘칠 수 있어, 관리요령
-    # 표와 같은 방식으로 넘치지 않는 선에서 글자 크기를 줄인다.
-    precaution_bodyPr = precaution_cell.text_frame._txBody.find(qn("a:bodyPr"))
-    p_t_ins = int(precaution_bodyPr.get("tIns", "45720")) if precaution_bodyPr is not None else 45720
-    p_b_ins = int(precaution_bodyPr.get("bIns", "45720")) if precaution_bodyPr is not None else 45720
-    p_l_ins = int(precaution_bodyPr.get("lIns", "91440")) if precaution_bodyPr is not None else 91440
-    p_r_ins = int(precaution_bodyPr.get("rIns", "91440")) if precaution_bodyPr is not None else 91440
-    precaution_usable_width = tbl.columns[1].width - p_l_ins - p_r_ins
-    precaution_usable_height = tbl.rows[1].height - p_t_ins - p_b_ins
-    precaution_font_pt = _fit_precaution_font(precaution_lines, precaution_usable_width, precaution_usable_height)
-    for p in precaution_cell.text_frame._txBody.findall(qn("a:p")):
-        for r in p.findall(qn("a:r")):
-            rPr = r.find(qn("a:rPr"))
-            if rPr is not None:
-                rPr.set("sz", str(int(precaution_font_pt * 100)))
+    phone = (msds.supplier_phone or "").split(",")[0].strip()
+    supplier_lines = [
+        f"{BULLET} 회사명 : {msds.supplier_name}",
+        f"{BULLET} 주소 : {msds.supplier_address}",
+        f"{BULLET} 연락처 : {phone}",
+    ]
+    row_lines = {1: hazard_lines, 2: precaution_lines, 3: supplier_lines}
+    for idx, lines in row_lines.items():
+        _replace_paragraphs(tbl.cell(idx, 1).text_frame._txBody, lines)
 
-    # 그림문자
+    # 세 칸 모두 높이가 고정(noAutofit)이라, 내용이 많으면 13pt 그대로는
+    # 넘칠 수 있다. 관리요령 표와 같은 방식으로 칸별로 넘치지 않는 선에서
+    # 글자 크기를 줄인다.
+    for idx, lines in row_lines.items():
+        cell = tbl.cell(idx, 1)
+        bodyPr = cell.text_frame._txBody.find(qn("a:bodyPr"))
+        t_ins = int(bodyPr.get("tIns", "45720")) if bodyPr is not None else 45720
+        b_ins = int(bodyPr.get("bIns", "45720")) if bodyPr is not None else 45720
+        l_ins = int(bodyPr.get("lIns", "91440")) if bodyPr is not None else 91440
+        r_ins = int(bodyPr.get("rIns", "91440")) if bodyPr is not None else 91440
+        usable_width = tbl.columns[1].width - l_ins - r_ins
+        usable_height = tbl.rows[idx].height - t_ins - b_ins
+        font_pt = _fit_precaution_font(lines, usable_width, usable_height)
+        for p in cell.text_frame._txBody.findall(qn("a:p")):
+            for r in p.findall(qn("a:r")):
+                rPr = r.find(qn("a:rPr"))
+                if rPr is not None:
+                    rPr.set("sz", str(int(font_pt * 100)))
+
+    # 그림문자: 표 1번째 행(신호어와 같은 행)의 오른쪽 칸 안에 배치한다.
     pic_names = {s.name for s in slide.shapes if s.shape_type == MSO_SHAPE_TYPE.PICTURE}
-    first_pic = next(s for s in slide.shapes if s.name in pic_names)
-    band_left, band_top, band_size = first_pic.left, first_pic.top, first_pic.width
     _remove_pictures(slide, pic_names)
     codes = ghs.pictograms_for_hcodes([c for c, _ in msds.hazard_statements])
-    _place_pictogram_row(slide, prs.slide_width, codes, band_left, band_top, band_size)
+    pic_cell_left = table_shape.left + tbl.columns[0].width
+    _place_pictogram_row_in_cell(
+        slide, pic_cell_left, table_shape.top, tbl.columns[1].width, tbl.rows[0].height, codes
+    )
 
     prs.save(out_path)
 

@@ -149,14 +149,8 @@ function replaceParagraphs(txBody, lines, templateIndex = 0) {
 // --------------------------------------------------------------------------
 
 const EMU_PER_PT = 12700;
-const FOOTER_MAX_FONT_PT = 12;
-const FOOTER_MIN_FONT_PT = 10;
-const TITLE_FIXED_FONT_PT = 36;
-const COMPOSITION_MAX_FONT_PT = 12;
-const COMPOSITION_MIN_FONT_PT = 8;
-const LINE_HEIGHT_FACTOR = 1.2;
-// 그림문자(그림)와 상자 사이에 남겨 둘 최소 여백.
-const PICTOGRAM_GAP_EMU = 50000;
+const TITLE_MAX_FONT_PT = 36;
+const TITLE_MIN_FONT_PT = 20;
 const WIDE_CHAR_EXTRA = new Set([0x203b, 0x260e, 0x2605, 0x2606, 0x2600]);
 
 function isWideChar(ch) {
@@ -179,103 +173,17 @@ function estimateTextWidthEmu(text, sizePt) {
   return widthEm * sizePt * EMU_PER_PT;
 }
 
-function fitFooterLines(address, company, phone, availableWidthEmu) {
-  const full = `※ 공급자 정보 : ${address}  ${company} ☎ ${phone}`;
-  for (let size = FOOTER_MAX_FONT_PT; size >= FOOTER_MIN_FONT_PT; size--) {
-    if (estimateTextWidthEmu(full, size) <= availableWidthEmu) return { lines: [full], size };
-  }
-  const size = FOOTER_MIN_FONT_PT;
-  // 전화번호가 혼자 한 줄을 차지하지 않도록, 우선 회사명과 같은 줄에 붙여본다
-  // (그래도 안 맞으면 전화번호만 따로 뺀다).
-  const candidates = [
-    [`※ 공급자 정보 : ${address}`, `${company}  ☎ ${phone}`],
-    [`※ 공급자 정보 : ${address}  ${company}`, `☎ ${phone}`],
-  ];
-  for (const [line1, line2] of candidates) {
-    if (estimateTextWidthEmu(line1, size) <= availableWidthEmu && estimateTextWidthEmu(line2, size) <= availableWidthEmu) {
-      return { lines: [line1, line2], size };
-    }
-  }
-  return { lines: candidates[0], size };
-}
-
-function setFooterText(shapeEl, lines, sizePt, maxBottom = null) {
-  const txBody = txBodyOf(shapeEl);
-  const bodyPr = firstEl(txBody, NS.a, "bodyPr");
-  for (const tag of ["normAutofit", "spAutoFit"]) {
-    const el = firstEl(bodyPr, NS.a, tag);
-    if (el) bodyPr.removeChild(el);
-  }
-  if (!firstEl(bodyPr, NS.a, "noAutofit")) {
-    bodyPr.appendChild(bodyPr.ownerDocument.createElementNS(NS.a, "a:noAutofit"));
-  }
-
-  const tIns = parseInt(bodyPr.getAttribute("tIns") || "45720", 10);
-  const bIns = parseInt(bodyPr.getAttribute("bIns") || "45720", 10);
-
-  replaceParagraphs(txBody, lines);
-  for (const p of allEls(txBody, NS.a, "p")) {
-    for (const r of allEls(p, NS.a, "r")) {
-      const rPr = firstEl(r, NS.a, "rPr");
-      if (rPr) rPr.setAttribute("sz", String(Math.round(sizePt * 100)));
-    }
-  }
-
-  const neededHeight = Math.round(lines.length * sizePt * 1.2 * EMU_PER_PT) + tIns + bIns;
-  const ext = shapeExt(shapeEl);
-  const off = shapeOff(shapeEl);
-  const curHeight = parseInt(ext.getAttribute("cy"), 10);
-  if (neededHeight > curHeight) {
-    // 글상자 높이를 늘려야 할 때, 아래쪽 경계(maxBottom, 보통 라벨 바깥 굵은
-    // 테두리 선의 y좌표)를 넘지 않도록 위쪽으로만 확장한다.
-    const curTop = parseInt(off.getAttribute("y"), 10);
-    let bottom = curTop + curHeight;
-    if (maxBottom !== null) bottom = Math.min(bottom, maxBottom);
-    ext.setAttribute("cy", String(neededHeight));
-    off.setAttribute("y", String(Math.round(bottom - neededHeight)));
-  }
-}
-
 // --------------------------------------------------------------------------
-// 제품명 + 성분 목록 글상자 자동 축소
+// 제목 글상자 자동 축소
 // --------------------------------------------------------------------------
 
-// 제목(36pt 고정) + 성분 목록이 상자 높이 안에 들어가도록 성분 목록 글자
-// 크기와 상자에 필요한 높이를 정한다. 상자는 세로 가운데 정렬(anchor=ctr)
-// 이라 내용이 길어지면 위/아래로 넘쳐 인쇄 서식 경계(제목 위쪽 테두리, 그림문자
-// 영역)를 넘어갈 수 있어, 성분 목록 글자 크기부터 줄이고 그래도 안 맞으면
-// 상자 높이를(그림문자와 겹치지 않는 한도까지) 늘린다.
-// 제품명이 길면(특히 영문 제품명) 36pt 고정 폭에 한 줄로 안 들어가 줄바꿈될
-// 수 있다. 1줄로 가정하고 높이를 계산하면 실제로 2줄 이상이 될 때 다시
-// 테두리를 침범하므로, titleLines로 줄바꿈 예상 줄 수를 반영해야 한다.
-function fitLabelCompositionSize(nRows, tIns, bIns, topGapEmu, maxHeightEmu, titleLines = 1) {
-  const titleHeightFactor = TITLE_FIXED_FONT_PT * titleLines;
-  for (let contentPt = COMPOSITION_MAX_FONT_PT; contentPt >= COMPOSITION_MIN_FONT_PT; contentPt--) {
-    const needed = LINE_HEIGHT_FACTOR * (titleHeightFactor + contentPt * nRows) * EMU_PER_PT
-      + tIns + bIns + 2 * topGapEmu;
-    if (needed <= maxHeightEmu) return { contentPt, requiredHeight: needed };
+// 제목은 항상 한 줄로 표시한다. 36pt로 상자 폭에 안 들어가는(제품명이 길거나
+// 영문+한글이 병기된) 경우, 20pt까지 줄여 한 줄을 유지한다.
+function fitTitleFont(text, usableWidthEmu) {
+  for (let fontPt = TITLE_MAX_FONT_PT; fontPt >= TITLE_MIN_FONT_PT; fontPt--) {
+    if (estimateTextWidthEmu(text, fontPt) <= usableWidthEmu) return fontPt;
   }
-  const contentPt = COMPOSITION_MIN_FONT_PT;
-  const needed = LINE_HEIGHT_FACTOR * (titleHeightFactor + contentPt * nRows) * EMU_PER_PT
-    + tIns + bIns + 2 * topGapEmu;
-  return { contentPt, requiredHeight: Math.min(needed, maxHeightEmu) };
-}
-
-// --------------------------------------------------------------------------
-// 그림문자 배치 (고정 3슬롯 방식)
-// --------------------------------------------------------------------------
-
-function applyPictogramSlots(doc, zip, slots, codes) {
-  const capped = codes.slice(0, MAX_PICTOGRAMS_WEB);
-  for (let i = 0; i < slots.length; i++) {
-    if (i < capped.length) {
-      const bytes = base64ToUint8Array(MSDS_ASSETS.pictograms[capped[i]]);
-      zip.file(slots[i].mediaPath, bytes);
-    } else {
-      const pic = findPictureByName(doc, slots[i].name);
-      if (pic && pic.parentNode) pic.parentNode.removeChild(pic);
-    }
-  }
+  return TITLE_MIN_FONT_PT;
 }
 
 function repositionPictureShape(pic, x, y, size) {
@@ -378,138 +286,85 @@ async function buildLabelSlide(msds) {
   const zip = await loadTemplateZip(MSDS_ASSETS.labelTemplate);
   const doc = await getSlideDoc(zip);
 
-  // 제품명 + 성분 목록
+  // 제목: 제품명만 표시한다(구성성분 목록은 별도 요청에 따라 삭제됨).
+  // 항상 한 줄로 유지하되, 제품명이 길면 최소 20pt까지 줄인다.
   const rect14 = findShapeByName(doc, "Rectangle 14");
   const txBody14 = txBodyOf(rect14);
-  const ps = allEls(txBody14, NS.a, "p");
-  const titleP = ps[0];
+  const titleP = allEls(txBody14, NS.a, "p")[0];
   setParagraphText(titleP, msds.productName);
-  const compTemplateIdx = ps.length > 1 ? 1 : 0;
-  const compTemplate = ps[compTemplateIdx].cloneNode(true);
-  for (let i = ps.length - 1; i >= 1; i--) txBody14.removeChild(ps[i]);
-  for (const [name, cas, content] of msds.composition) {
-    const newP = compTemplate.cloneNode(true);
-    const contentDisp = content.endsWith("%") ? content : `${content}%`;
-    setParagraphText(newP, `( CAS No. : ${cas} ,  함유량 : ${contentDisp}) - ${name}`);
-    txBody14.appendChild(newP);
-  }
-
-  // 상자가 세로 가운데 정렬이라, 성분이 많아 전체 내용이 길어지면 제목이
-  // 위쪽 테두리를 넘어가거나 아래쪽 그림문자와 겹칠 수 있다. 제목은 항상
-  // 36pt 굵게 고정하고, 성분 목록 글자 크기와 상자 높이를 성분 개수에 맞춰
-  // 다시 계산해 위쪽 테두리와 그림문자 사이 안에 들어오도록 한다.
   const rect14Ext = shapeExt(rect14);
-  const rect14Off = shapeOff(rect14);
-  const rect14Height = parseInt(rect14Ext.getAttribute("cy"), 10);
   const rect14Width = parseInt(rect14Ext.getAttribute("cx"), 10);
-  const rect14Top = parseInt(rect14Off.getAttribute("y"), 10);
   const bodyPr14 = firstEl(txBody14, NS.a, "bodyPr");
-  const tIns14 = parseInt(bodyPr14.getAttribute("tIns") || "45720", 10);
-  const bIns14 = parseInt(bodyPr14.getAttribute("bIns") || "45720", 10);
   const lIns14 = parseInt(bodyPr14.getAttribute("lIns") || "90000", 10);
   const rIns14 = parseInt(bodyPr14.getAttribute("rIns") || "90000", 10);
-  const outlineForTitle = findShapeByName(doc, "Rectangle 2");
-  let topGapEmu = 0;
-  if (outlineForTitle) {
-    const outlineOffForTitle = shapeOff(outlineForTitle);
-    const outlineTop = parseInt(outlineOffForTitle.getAttribute("y"), 10);
-    topGapEmu = Math.max(0, outlineTop - rect14Top - tIns14);
-  }
-  const picTops = LABEL_PICTURE_SLOTS
-    .map((slot) => findPictureByName(doc, slot.name))
-    .filter(Boolean)
-    .map((pic) => parseInt(shapeOff(pic).getAttribute("y"), 10));
-  let maxHeight = rect14Height;
-  if (picTops.length) {
-    const maxBottomForTitle = Math.min(...picTops) - PICTOGRAM_GAP_EMU;
-    maxHeight = Math.max(rect14Height, maxBottomForTitle - rect14Top);
-  }
   const titleUsableWidth = rect14Width - lIns14 - rIns14;
-  const titleWidth = estimateTextWidthEmu(msds.productName, TITLE_FIXED_FONT_PT);
-  const titleLines = titleUsableWidth > 0 ? Math.max(1, Math.ceil(titleWidth / titleUsableWidth)) : 1;
-  const { contentPt, requiredHeight } = fitLabelCompositionSize(
-    msds.composition.length, tIns14, bIns14, topGapEmu, maxHeight, titleLines
-  );
-  if (requiredHeight > rect14Height) {
-    rect14Ext.setAttribute("cy", String(Math.round(requiredHeight)));
-  }
+  const titleFontPt = fitTitleFont(msds.productName, titleUsableWidth);
   for (const r of allEls(titleP, NS.a, "r")) {
     const rPr = firstEl(r, NS.a, "rPr");
     if (rPr) {
-      rPr.setAttribute("sz", String(Math.round(TITLE_FIXED_FONT_PT * 100)));
+      rPr.setAttribute("sz", String(Math.round(titleFontPt * 100)));
       rPr.setAttribute("b", "1");
     }
   }
-  const compPs = allEls(txBody14, NS.a, "p").slice(1);
-  for (const p of compPs) {
-    for (const r of allEls(p, NS.a, "r")) {
-      const rPr = firstEl(r, NS.a, "rPr");
-      if (rPr) rPr.setAttribute("sz", String(Math.round(contentPt * 100)));
-    }
-  }
 
-  // 신호어 (원본이 "신호어 : 해당없음"으로 명시한 문서는 실제로 GHS
-  // 미분류 제품이라 신호어가 없는 것이 맞으므로, "경고"로 임의 대체하지
-  // 않고 원본 값을 그대로(없으면 빈 칸으로) 반영한다.
-  const rect15 = findShapeByName(doc, "Rectangle 15");
-  setParagraphText(firstEl(txBodyOf(rect15), NS.a, "p"), msds.signalWord || "");
-
-  // 공급자 정보
-  const rect16 = findShapeByName(doc, "Rectangle 16");
-  const phone = (msds.supplierPhone || "").split(",")[0].trim();
-  const bodyPr16 = firstEl(txBodyOf(rect16), NS.a, "bodyPr");
-  const lIns = parseInt(bodyPr16.getAttribute("lIns") || "91440", 10);
-  const rIns = parseInt(bodyPr16.getAttribute("rIns") || "91440", 10);
-  const rect16Width = parseInt(shapeExt(rect16).getAttribute("cx"), 10);
-  const availableWidth = rect16Width - lIns - rIns;
-  const { lines: footerLines, size: footerSize } = fitFooterLines(
-    msds.supplierAddress, msds.supplierName, phone, availableWidth
-  );
-  const outline = findShapeByName(doc, "Rectangle 2");
-  let maxBottom = null;
-  if (outline) {
-    const outlineOff = shapeOff(outline);
-    const outlineExt = shapeExt(outline);
-    maxBottom = parseInt(outlineOff.getAttribute("y"), 10) + parseInt(outlineExt.getAttribute("cy"), 10);
-  }
-  setFooterText(rect16, footerLines, footerSize, maxBottom);
-
-  // 표: 유해ㆍ위험 문구 / 예방조치 문구
+  // 표: [신호어 + 그림문자] / [유해ㆍ위험 문구] / [예방조치 문구] / [공급자 정보]
   const tableShape = findTableShape(doc);
   const tbl = firstEl(tableShape, NS.a, "tbl");
   const rows = allEls(tbl, NS.a, "tr");
-  const row0Cells = allEls(rows[0], NS.a, "tc");
-  const row1Cells = allEls(rows[1], NS.a, "tc");
+  const cellsOf = (rowIdx) => allEls(rows[rowIdx], NS.a, "tc");
+
+  // 신호어 (원본이 "신호어 : 해당없음"으로 명시한 문서는 실제로 GHS 미분류
+  // 제품이라 신호어가 없는 것이 맞으므로, "경고"로 임의 대체하지 않고 원본
+  // 값을 그대로(없으면 빈 칸으로) 반영한다.
+  setParagraphText(firstEl(firstEl(cellsOf(0)[0], NS.a, "txBody"), NS.a, "p"), msds.signalWord || "");
 
   const hazardLines = msds.hazardStatements.slice(0, MAX_HAZARD_BULLETS).map(([, desc]) => `${BULLET} ${desc}`);
-  replaceParagraphs(firstEl(row0Cells[1], NS.a, "txBody"), hazardLines);
   const precautionLines = selectPrecautionLines(msds.precaution);
-  const precautionTxBody = firstEl(row1Cells[1], NS.a, "txBody");
-  replaceParagraphs(precautionTxBody, precautionLines);
-  // 예방/대응/저장/폐기 네 그룹 모두에서 발췌하다 보니(위 selectPrecautionLines)
-  // 항목이 많은 문서에서는 칸 높이가 고정된 13pt로 넘칠 수 있어, 관리요령
-  // 표와 같은 방식으로 넘치지 않는 선에서 글자 크기를 줄인다.
-  const precautionBodyPr = firstEl(precautionTxBody, NS.a, "bodyPr");
-  const pTIns = parseInt((precautionBodyPr && precautionBodyPr.getAttribute("tIns")) || "45720", 10);
-  const pBIns = parseInt((precautionBodyPr && precautionBodyPr.getAttribute("bIns")) || "45720", 10);
-  const pLIns = parseInt((precautionBodyPr && precautionBodyPr.getAttribute("lIns")) || "91440", 10);
-  const pRIns = parseInt((precautionBodyPr && precautionBodyPr.getAttribute("rIns")) || "91440", 10);
-  const gridColsForPrecaution = allEls(firstEl(tbl, NS.a, "tblGrid"), NS.a, "gridCol");
-  const precautionColWidth = parseInt(gridColsForPrecaution[1].getAttribute("w"), 10);
-  const precautionUsableWidth = precautionColWidth - pLIns - pRIns;
-  const precautionRowHeight = parseInt(rows[1].getAttribute("h"), 10);
-  const precautionUsableHeight = precautionRowHeight - pTIns - pBIns;
-  const precautionFontPt = fitPrecautionFont(precautionLines, precautionUsableWidth, precautionUsableHeight);
-  for (const p of allEls(row1Cells[1], NS.a, "p")) {
-    for (const r of allEls(p, NS.a, "r")) {
-      const rPr = firstEl(r, NS.a, "rPr");
-      if (rPr) rPr.setAttribute("sz", String(Math.round(precautionFontPt * 100)));
+  const phone = (msds.supplierPhone || "").split(",")[0].trim();
+  const supplierLines = [
+    `${BULLET} 회사명 : ${msds.supplierName}`,
+    `${BULLET} 주소 : ${msds.supplierAddress}`,
+    `${BULLET} 연락처 : ${phone}`,
+  ];
+  const rowLinesMap = { 1: hazardLines, 2: precautionLines, 3: supplierLines };
+  for (const idx of [1, 2, 3]) {
+    replaceParagraphs(firstEl(cellsOf(idx)[1], NS.a, "txBody"), rowLinesMap[idx]);
+  }
+
+  // 세 칸 모두 높이가 고정(noAutofit)이라, 내용이 많으면 13pt 그대로는
+  // 넘칠 수 있다. 관리요령 표와 같은 방식으로 칸별로 넘치지 않는 선에서
+  // 글자 크기를 줄인다.
+  const gridCols = allEls(firstEl(tbl, NS.a, "tblGrid"), NS.a, "gridCol");
+  const col1Width = parseInt(gridCols[1].getAttribute("w"), 10);
+  for (const idx of [1, 2, 3]) {
+    const cellTxBody = firstEl(cellsOf(idx)[1], NS.a, "txBody");
+    const bodyPr = firstEl(cellTxBody, NS.a, "bodyPr");
+    const tIns = parseInt((bodyPr && bodyPr.getAttribute("tIns")) || "45720", 10);
+    const bIns = parseInt((bodyPr && bodyPr.getAttribute("bIns")) || "45720", 10);
+    const lIns = parseInt((bodyPr && bodyPr.getAttribute("lIns")) || "91440", 10);
+    const rIns = parseInt((bodyPr && bodyPr.getAttribute("rIns")) || "91440", 10);
+    const usableWidth = col1Width - lIns - rIns;
+    const rowHeight = parseInt(rows[idx].getAttribute("h"), 10);
+    const usableHeight = rowHeight - tIns - bIns;
+    const fontPt = fitPrecautionFont(rowLinesMap[idx], usableWidth, usableHeight);
+    for (const p of allEls(cellsOf(idx)[1], NS.a, "p")) {
+      for (const r of allEls(p, NS.a, "r")) {
+        const rPr = firstEl(r, NS.a, "rPr");
+        if (rPr) rPr.setAttribute("sz", String(Math.round(fontPt * 100)));
+      }
     }
   }
 
-  // 그림문자
+  // 그림문자: 표 1번째 행(신호어와 같은 행)의 오른쪽 칸 안에 배치한다.
+  const tblXfrm = firstEl(tableShape, NS.p, "xfrm");
+  const tblOff = firstEl(tblXfrm, NS.a, "off");
+  const tableLeft = parseInt(tblOff.getAttribute("x"), 10);
+  const tableTop = parseInt(tblOff.getAttribute("y"), 10);
+  const col0Width = parseInt(gridCols[0].getAttribute("w"), 10);
+  const row0Height = parseInt(rows[0].getAttribute("h"), 10);
+  const picCellLeft = tableLeft + col0Width;
   const codes = pictogramsForHcodes(msds.hazardStatements.map(([c]) => c));
-  applyPictogramSlots(doc, zip, LABEL_PICTURE_SLOTS, codes);
+  applyPictogramSlotsCentered(doc, zip, LABEL_PICTURE_SLOTS, codes, picCellLeft, tableTop, col1Width, row0Height);
 
   zip.file("ppt/slides/slide1.xml", serializeDoc(doc));
   return zip.generateAsync({ type: "blob", mimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation" });
