@@ -284,26 +284,64 @@ function hazardBulletsForHandling(hazardStatements, classification) {
 }
 
 // --------------------------------------------------------------------------
+// 미리보기(편집 화면)용 데이터 추출 - "DATA 추출" 단계에서 사용
+// --------------------------------------------------------------------------
+
+// buildLabelSlide가 표에 그대로 채워 넣을 최종 줄 단위 텍스트를 미리 계산해
+// 돌려준다. 사용자가 편집 화면에서 이 문자열들을 직접 수정한 뒤 "PPT 생성"을
+// 누르면, 그 편집된 텍스트가 (재계산 없이) 그대로 PPT에 들어간다.
+function computeLabelPreview(msds) {
+  const phone = (msds.supplierPhone || "").split(",")[0].trim();
+  return {
+    productName: msds.productName || "",
+    signalWord: msds.signalWord || "",
+    hazardLines: msds.hazardStatements.slice(0, MAX_HAZARD_BULLETS).map(([, desc]) => `${BULLET} ${desc}`),
+    precautionLines: selectPrecautionLines(msds.precaution),
+    supplierName: msds.supplierName || "",
+    supplierAddress: msds.supplierAddress || "",
+    supplierPhone: phone,
+    pictogramCodes: pictogramsForHcodes(msds.hazardStatements.map(([c]) => c)),
+  };
+}
+
+function computeHandlingPreview(msds) {
+  return {
+    productName: msds.productName || "",
+    hazardLines: hazardBulletsForHandling(msds.hazardStatements, msds.classification),
+    handlingLines: handlingBullets(msds),
+    ppeLines: ppeBullets(msds),
+    firstAidLines: firstAidBullets(msds),
+    accidentLines: accidentResponseBullets(msds),
+    pictogramCodes: pictogramsForHcodes(msds.hazardStatements.map(([c]) => c)),
+  };
+}
+
+// --------------------------------------------------------------------------
 // 템플릿 A: 현장경고표지
 // --------------------------------------------------------------------------
 
-async function buildLabelSlide(msds) {
+// overrides가 주어지면(편집 화면에서 "PPT 생성"을 눌렀을 때) msds 원본 데이터
+// 대신 사용자가 수정한 값을 그대로 사용한다. overrides가 없으면(추출 없이
+// 바로 생성하는 기존 경로) msds에서 직접 계산한다.
+async function buildLabelSlide(msds, overrides = null) {
   const zip = await loadTemplateZip(MSDS_ASSETS.labelTemplate);
   const doc = await getSlideDoc(zip);
+
+  const productName = (overrides && overrides.productName) || msds.productName;
 
   // 제목: 제품명만 표시한다(구성성분 목록은 별도 요청에 따라 삭제됨).
   // 항상 한 줄로 유지하되, 제품명이 길면 최소 20pt까지 줄인다.
   const rect14 = findShapeByName(doc, "Rectangle 14");
   const txBody14 = txBodyOf(rect14);
   const titleP = allEls(txBody14, NS.a, "p")[0];
-  setParagraphText(titleP, msds.productName);
+  setParagraphText(titleP, productName);
   const rect14Ext = shapeExt(rect14);
   const rect14Width = parseInt(rect14Ext.getAttribute("cx"), 10);
   const bodyPr14 = firstEl(txBody14, NS.a, "bodyPr");
   const lIns14 = parseInt(bodyPr14.getAttribute("lIns") || "90000", 10);
   const rIns14 = parseInt(bodyPr14.getAttribute("rIns") || "90000", 10);
   const titleUsableWidth = rect14Width - lIns14 - rIns14;
-  const titleFontPt = fitTitleFont(msds.productName, titleUsableWidth);
+  const titleFontPt = fitTitleFont(productName, titleUsableWidth);
   for (const r of allEls(titleP, NS.a, "r")) {
     const rPr = firstEl(r, NS.a, "rPr");
     if (rPr) {
@@ -321,14 +359,18 @@ async function buildLabelSlide(msds) {
   // 신호어 (원본이 "신호어 : 해당없음"으로 명시한 문서는 실제로 GHS 미분류
   // 제품이라 신호어가 없는 것이 맞으므로, "경고"로 임의 대체하지 않고 원본
   // 값을 그대로(없으면 빈 칸으로) 반영한다.
-  setParagraphText(firstEl(firstEl(cellsOf(0)[0], NS.a, "txBody"), NS.a, "p"), msds.signalWord || "");
+  const signalWord = overrides ? (overrides.signalWord || "") : (msds.signalWord || "");
+  setParagraphText(firstEl(firstEl(cellsOf(0)[0], NS.a, "txBody"), NS.a, "p"), signalWord);
 
-  const hazardLines = msds.hazardStatements.slice(0, MAX_HAZARD_BULLETS).map(([, desc]) => `${BULLET} ${desc}`);
-  const precautionLines = selectPrecautionLines(msds.precaution);
-  const phone = (msds.supplierPhone || "").split(",")[0].trim();
+  const hazardLines = (overrides && overrides.hazardLines) ||
+    msds.hazardStatements.slice(0, MAX_HAZARD_BULLETS).map(([, desc]) => `${BULLET} ${desc}`);
+  const precautionLines = (overrides && overrides.precautionLines) || selectPrecautionLines(msds.precaution);
+  const supplierName = overrides ? overrides.supplierName : msds.supplierName;
+  const supplierAddress = overrides ? overrides.supplierAddress : msds.supplierAddress;
+  const phone = overrides ? (overrides.supplierPhone || "") : (msds.supplierPhone || "").split(",")[0].trim();
   const supplierLines = [
-    `${BULLET} 회사명 : ${msds.supplierName}`,
-    `${BULLET} 주소 : ${msds.supplierAddress}`,
+    `${BULLET} 회사명 : ${supplierName}`,
+    `${BULLET} 주소 : ${supplierAddress}`,
     `${BULLET} 연락처 : ${phone}`,
   ];
   const rowLinesMap = { 1: hazardLines, 2: precautionLines, 3: supplierLines };
@@ -368,7 +410,7 @@ async function buildLabelSlide(msds) {
   const col0Width = parseInt(gridCols[0].getAttribute("w"), 10);
   const row0Height = parseInt(rows[0].getAttribute("h"), 10);
   const picCellLeft = tableLeft + col0Width;
-  const codes = pictogramsForHcodes(msds.hazardStatements.map(([c]) => c));
+  const codes = (overrides && overrides.pictogramCodes) || pictogramsForHcodes(msds.hazardStatements.map(([c]) => c));
   applyPictogramSlotsCentered(doc, zip, LABEL_PICTURE_SLOTS, codes, picCellLeft, tableTop, col1Width, row0Height);
 
   zip.file("ppt/slides/slide1.xml", serializeDoc(doc));
@@ -461,9 +503,13 @@ function fitHandlingTableFont(rowLines, usableWidthEmu, tIns, bIns, budgetEmu) {
   return { fontPt: HANDLING_BODY_MIN_FONT_PT, heights: heightsAt(HANDLING_BODY_MIN_FONT_PT) };
 }
 
-async function buildHandlingSlide(msds) {
+// overrides가 주어지면(편집 화면에서 "PPT 생성"을 눌렀을 때) msds 원본 데이터
+// 대신 사용자가 수정한 값을 그대로 사용한다.
+async function buildHandlingSlide(msds, overrides = null) {
   const zip = await loadTemplateZip(MSDS_ASSETS.handlingTemplate);
   const doc = await getSlideDoc(zip);
+
+  const productName = (overrides && overrides.productName) || msds.productName;
 
   const tableShape = findTableShape(doc);
   const tbl = firstEl(tableShape, NS.a, "tbl");
@@ -489,13 +535,13 @@ async function buildHandlingSlide(msds) {
   // 현장경고표지와 관리요령의 제목 크기가 서로 달라 보이는 문제가 있었다).
   const titleTxBody = firstEl(cellsOf(0)[0], NS.a, "txBody");
   const titleP = firstEl(titleTxBody, NS.a, "p");
-  setParagraphText(titleP, msds.productName);
+  setParagraphText(titleP, productName);
   const titleTcPr = firstEl(cellsOf(0)[0], NS.a, "tcPr");
   const titleLIns = parseInt((titleTcPr && titleTcPr.getAttribute("marL")) || "91440", 10);
   const titleRIns = parseInt((titleTcPr && titleTcPr.getAttribute("marR")) || "91440", 10);
   const titleTableWidth = parseInt(ext0.getAttribute("cx"), 10);
   const titleUsableWidth = titleTableWidth - titleLIns - titleRIns;
-  const titleFontPt = fitTitleFont(msds.productName, titleUsableWidth);
+  const titleFontPt = fitTitleFont(productName, titleUsableWidth);
   for (const r of allEls(titleP, NS.a, "r")) {
     const rPr = firstEl(r, NS.a, "rPr");
     if (rPr) {
@@ -505,11 +551,11 @@ async function buildHandlingSlide(msds) {
   }
 
   const rowLinesMap = {
-    2: hazardBulletsForHandling(msds.hazardStatements, msds.classification),
-    3: handlingBullets(msds),
-    4: ppeBullets(msds),
-    5: firstAidBullets(msds),
-    6: accidentResponseBullets(msds),
+    2: (overrides && overrides.hazardLines) || hazardBulletsForHandling(msds.hazardStatements, msds.classification),
+    3: (overrides && overrides.handlingLines) || handlingBullets(msds),
+    4: (overrides && overrides.ppeLines) || ppeBullets(msds),
+    5: (overrides && overrides.firstAidLines) || firstAidBullets(msds),
+    6: (overrides && overrides.accidentLines) || accidentResponseBullets(msds),
   };
   for (const idx of HANDLING_CONTENT_ROWS) {
     replaceParagraphs(firstEl(cellsOf(idx)[1], NS.a, "txBody"), rowLinesMap[idx]);
@@ -560,7 +606,7 @@ async function buildHandlingSlide(msds) {
   const row1Height = parseInt(rows[1].getAttribute("h"), 10);
   const picCellTop = tableTop + row0Height;
 
-  const codes = pictogramsForHcodes(msds.hazardStatements.map(([c]) => c));
+  const codes = (overrides && overrides.pictogramCodes) || pictogramsForHcodes(msds.hazardStatements.map(([c]) => c));
   applyPictogramSlotsCentered(doc, zip, HANDLING_PICTURE_SLOTS, codes, tableLeft, picCellTop, tableWidth, row1Height);
 
   zip.file("ppt/slides/slide1.xml", serializeDoc(doc));

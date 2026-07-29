@@ -106,11 +106,59 @@ function downloadBlob(blob, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 10000);
 }
 
-async function handleGenerate() {
+// DATA 추출 단계에서 파싱한 원본 MSDS 데이터. "PPT 생성"은 이 값과 편집
+// 화면에서 사용자가 고친 텍스트를 합쳐 PPT를 만든다.
+let extractedMsds = null;
+// 그림문자는 자유 텍스트 편집 대상이 아니라, 추출 시점의 유해성 코드로
+// 고정한다(경고표지/관리요령 각각 그림문자를 배치하는 칸이 달라 개별 보관).
+let labelPictogramCodes = [];
+let handlingPictogramCodes = [];
+
+function textareaLines(id) {
+  return document
+    .getElementById(id)
+    .value.split("\n")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function setTextareaLines(id, lines) {
+  document.getElementById(id).value = (lines || []).join("\n");
+}
+
+function resetExtraction() {
+  extractedMsds = null;
+  labelPictogramCodes = [];
+  handlingPictogramCodes = [];
+  document.getElementById("editSection").hidden = true;
+  document.getElementById("results").innerHTML = "";
+}
+
+function fillEditForm(msds) {
+  const labelPreview = computeLabelPreview(msds);
+  const handlingPreview = computeHandlingPreview(msds);
+  labelPictogramCodes = labelPreview.pictogramCodes;
+  handlingPictogramCodes = handlingPreview.pictogramCodes;
+
+  document.getElementById("editProductName").value = msds.productName || "";
+
+  document.getElementById("editSignalWord").value = labelPreview.signalWord;
+  setTextareaLines("editHazardLines", labelPreview.hazardLines);
+  setTextareaLines("editPrecautionLines", labelPreview.precautionLines);
+  document.getElementById("editSupplierName").value = labelPreview.supplierName;
+  document.getElementById("editSupplierAddress").value = labelPreview.supplierAddress;
+  document.getElementById("editSupplierPhone").value = labelPreview.supplierPhone;
+
+  setTextareaLines("editHandlingHazardLines", handlingPreview.hazardLines);
+  setTextareaLines("editHandlingCareLines", handlingPreview.handlingLines);
+  setTextareaLines("editPpeLines", handlingPreview.ppeLines);
+  setTextareaLines("editFirstAidLines", handlingPreview.firstAidLines);
+  setTextareaLines("editAccidentLines", handlingPreview.accidentLines);
+}
+
+async function handleExtract() {
   const fileInput = document.getElementById("pdfInput");
-  const seqInput = document.getElementById("seqInput");
-  const resultsEl = document.getElementById("results");
-  resultsEl.innerHTML = "";
+  resetExtraction();
 
   const file = fileInput.files[0];
   if (!file) {
@@ -125,20 +173,63 @@ async function handleGenerate() {
 
     setStatus("MSDS 내용을 분석하는 중…");
     const msds = parseMsds(pages, file.name);
+    extractedMsds = msds;
+    fillEditForm(msds);
+    document.getElementById("editSection").hidden = false;
 
     if (!msds.productName) {
-      setStatus("경고: 제품명을 추출하지 못했습니다. MSDS 서식이 예상과 다를 수 있습니다. 계속 진행합니다…", true);
+      setStatus("경고: 제품명을 추출하지 못했습니다. MSDS 서식이 예상과 다를 수 있습니다. 아래에서 직접 채워 넣으세요.", true);
     } else {
-      setStatus(`"${msds.productName}" 인식됨. PPT를 생성하는 중…`);
+      setStatus(`"${msds.productName}" 인식됨. 아래에서 내용을 확인·수정한 뒤 "PPT 생성"을 누르세요.`);
     }
+  } catch (err) {
+    console.error(err);
+    setStatus(`오류: ${err.message}`, true);
+  }
+}
+
+async function handleGeneratePpt() {
+  if (!extractedMsds) {
+    setStatus("먼저 MSDS PDF를 선택하고 \"DATA 추출\"을 눌러주세요.", true);
+    return;
+  }
+
+  const seqInput = document.getElementById("seqInput");
+  const resultsEl = document.getElementById("results");
+  resultsEl.innerHTML = "";
+
+  try {
+    setStatus("PPT를 생성하는 중…");
+
+    const productName = document.getElementById("editProductName").value.trim() || extractedMsds.productName;
+
+    const labelOverrides = {
+      productName,
+      signalWord: document.getElementById("editSignalWord").value.trim(),
+      hazardLines: textareaLines("editHazardLines"),
+      precautionLines: textareaLines("editPrecautionLines"),
+      supplierName: document.getElementById("editSupplierName").value.trim(),
+      supplierAddress: document.getElementById("editSupplierAddress").value.trim(),
+      supplierPhone: document.getElementById("editSupplierPhone").value.trim(),
+      pictogramCodes: labelPictogramCodes,
+    };
+    const handlingOverrides = {
+      productName,
+      hazardLines: textareaLines("editHandlingHazardLines"),
+      handlingLines: textareaLines("editHandlingCareLines"),
+      ppeLines: textareaLines("editPpeLines"),
+      firstAidLines: textareaLines("editFirstAidLines"),
+      accidentLines: textareaLines("editAccidentLines"),
+      pictogramCodes: handlingPictogramCodes,
+    };
 
     const seq = (seqInput.value || "").trim();
     const revDate = todayYmd();
-    const names = buildFilenames(msds.productName, seq, revDate);
+    const names = buildFilenames(productName, seq, revDate);
 
     const [labelBlob, handlingBlob] = await Promise.all([
-      buildLabelSlide(msds),
-      buildHandlingSlide(msds),
+      buildLabelSlide(extractedMsds, labelOverrides),
+      buildHandlingSlide(extractedMsds, handlingOverrides),
     ]);
 
     addResultRow(resultsEl, names.label, labelBlob);
@@ -149,6 +240,19 @@ async function handleGenerate() {
     console.error(err);
     setStatus(`오류: ${err.message}`, true);
   }
+}
+
+function setupTabs() {
+  const tabBtns = document.querySelectorAll(".tab-btn");
+  tabBtns.forEach((btn) => {
+    btn.addEventListener("click", () => {
+      tabBtns.forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      document.querySelectorAll(".tab-page").forEach((p) => {
+        p.hidden = p.id !== btn.dataset.target;
+      });
+    });
+  });
 }
 
 function addResultRow(container, filename, blob) {
@@ -209,6 +313,8 @@ function setupDropzone() {
 
   fileInput.addEventListener("change", () => {
     renderSelectedFile(fileInput.files[0] || null);
+    resetExtraction();
+    setStatus("");
   });
 
   if (removeBtn) {
@@ -217,6 +323,7 @@ function setupDropzone() {
       e.stopPropagation();
       fileInput.value = "";
       renderSelectedFile(null);
+      resetExtraction();
       setStatus("");
     });
   }
@@ -247,12 +354,15 @@ function setupDropzone() {
     }
     fileInput.files = files;
     renderSelectedFile(file);
+    resetExtraction();
     setStatus(`"${file.name}" 파일이 선택되었습니다.`);
   });
 }
 
 document.addEventListener("DOMContentLoaded", () => {
-  document.getElementById("generateBtn").addEventListener("click", handleGenerate);
+  document.getElementById("extractBtn").addEventListener("click", handleExtract);
+  document.getElementById("generateBtn").addEventListener("click", handleGeneratePpt);
   setupDropzone();
+  setupTabs();
   renderSelectedFile(null);
 });

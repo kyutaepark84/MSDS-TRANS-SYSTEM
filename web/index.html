@@ -34,13 +34,25 @@
     font-weight: 600;
     margin-bottom: 6px;
   }
-  input[type="text"] {
+  input[type="text"],
+  textarea {
     width: 100%;
     box-sizing: border-box;
     padding: 8px;
     margin-bottom: 16px;
     border: 1px solid #ccc;
     border-radius: 6px;
+    font-family: inherit;
+    font-size: 14px;
+  }
+  textarea {
+    resize: vertical;
+    line-height: 1.5;
+  }
+  .field-hint {
+    font-size: 12px;
+    color: #888;
+    margin: -12px 0 10px;
   }
   .visually-hidden {
     position: absolute;
@@ -53,6 +65,7 @@
     white-space: nowrap;
     border: 0;
   }
+  button#extractBtn,
   button#generateBtn {
     background: #1a5fb4;
     color: white;
@@ -62,8 +75,35 @@
     font-size: 15px;
     cursor: pointer;
   }
+  button#extractBtn:hover,
   button#generateBtn:hover {
     background: #144a8c;
+  }
+  .edit-section {
+    margin-top: 24px;
+    padding-top: 20px;
+    border-top: 1px solid #d9d9d9;
+  }
+  .tab-switcher {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 16px;
+  }
+  .tab-btn {
+    flex: 1;
+    padding: 10px 12px;
+    border: 1px solid #ccc;
+    background: #f4f4f4;
+    color: #444;
+    font-weight: 600;
+    font-size: 14px;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .tab-btn.active {
+    background: #1a5fb4;
+    color: white;
+    border-color: #1a5fb4;
   }
   .status {
     margin-top: 14px;
@@ -204,8 +244,12 @@
     body { color: #eee; background: #1e1e1e; }
     p.lead, .note, .upload-toolbar-hint, .dropzone-text, .dropzone-subtext, .dropzone-file-size { color: #aaa; }
     .card { border-color: #444; }
-    input { background: #2a2a2a; color: #eee; border-color: #555; }
+    input, textarea { background: #2a2a2a; color: #eee; border-color: #555; }
     .result-row { border-color: #333; }
+    .edit-section { border-color: #444; }
+    .tab-btn { background: #2a2a2a; color: #ccc; border-color: #555; }
+    .tab-btn.active { background: #4a90e2; border-color: #4a90e2; color: #111; }
+    .field-hint { color: #888; }
     .dropzone { border-color: #555; }
     .dropzone.dragover { border-color: #4a90e2; background: rgba(74, 144, 226, 0.1); }
     .btn-choose { background: #2a2a2a; border-color: #4a90e2; color: #4a90e2; }
@@ -217,7 +261,7 @@
 <body>
 
 <h1>MSDS 현장경고표지·관리요령 PPT 생성기</h1>
-<p class="lead">MSDS(물질안전보건자료) PDF를 올리면 현장경고표지(GHS 라벨)와 관리요령 PPT 2종을 자동으로 만들어 드립니다. 브라우저 안에서만 처리되며 파일이 서버로 전송되지 않습니다.</p>
+<p class="lead">MSDS(물질안전보건자료) PDF를 올리고 "DATA 추출"을 누르면 현장경고표지(GHS 라벨)와 관리요령에 들어갈 내용이 화면에 채워집니다. 필요하면 직접 수정한 뒤 "PPT 생성"을 눌러 PPT 2종을 내려받으세요. 브라우저 안에서만 처리되며 파일이 서버로 전송되지 않습니다.</p>
 
 <div class="card">
   <label for="pdfInput">MSDS PDF 파일</label>
@@ -243,15 +287,70 @@
   <label for="seqInput">사내 관리번호 (선택, 예: 21)</label>
   <input type="text" id="seqInput" placeholder="비워두면 번호 없이 생성됩니다" />
 
-  <button id="generateBtn">PPT 생성</button>
+  <button id="extractBtn">DATA 추출</button>
   <div class="status" id="status"></div>
+
+  <div class="edit-section" id="editSection" hidden>
+    <label for="editProductName">제품명 (현장경고표지·관리요령 공통)</label>
+    <input type="text" id="editProductName" />
+
+    <div class="tab-switcher">
+      <button type="button" class="tab-btn active" data-target="tabLabel">경고표지 PAGE</button>
+      <button type="button" class="tab-btn" data-target="tabHandling">관리요령 PAGE</button>
+    </div>
+
+    <div class="tab-page" id="tabLabel">
+      <label for="editSignalWord">신호어</label>
+      <input type="text" id="editSignalWord" />
+
+      <label for="editHazardLines">유해ㆍ위험 문구</label>
+      <p class="field-hint">한 줄에 하나씩 입력하세요.</p>
+      <textarea id="editHazardLines" rows="5"></textarea>
+
+      <label for="editPrecautionLines">예방조치 문구</label>
+      <p class="field-hint">한 줄에 하나씩 입력하세요.</p>
+      <textarea id="editPrecautionLines" rows="6"></textarea>
+
+      <label for="editSupplierName">공급자 정보 - 회사명</label>
+      <input type="text" id="editSupplierName" />
+      <label for="editSupplierAddress">공급자 정보 - 주소</label>
+      <input type="text" id="editSupplierAddress" />
+      <label for="editSupplierPhone">공급자 정보 - 연락처</label>
+      <input type="text" id="editSupplierPhone" />
+    </div>
+
+    <div class="tab-page" id="tabHandling" hidden>
+      <label for="editHandlingHazardLines">건강 및 환경에 대한 유해성ㆍ물리적 위험성</label>
+      <p class="field-hint">한 줄에 하나씩 입력하세요.</p>
+      <textarea id="editHandlingHazardLines" rows="5"></textarea>
+
+      <label for="editHandlingCareLines">안전ㆍ보건상의 취급주의사항</label>
+      <p class="field-hint">한 줄에 하나씩 입력하세요.</p>
+      <textarea id="editHandlingCareLines" rows="5"></textarea>
+
+      <label for="editPpeLines">적절한 보호구</label>
+      <p class="field-hint">한 줄에 하나씩 입력하세요.</p>
+      <textarea id="editPpeLines" rows="4"></textarea>
+
+      <label for="editFirstAidLines">응급조치요령</label>
+      <p class="field-hint">"▶ 항목" 줄과 "- 설명" 줄이 번갈아 나오는 형식입니다. 한 줄에 하나씩 입력하세요.</p>
+      <textarea id="editFirstAidLines" rows="9"></textarea>
+
+      <label for="editAccidentLines">사고 시 대처방법</label>
+      <p class="field-hint">한 줄에 하나씩 입력하세요.</p>
+      <textarea id="editAccidentLines" rows="4"></textarea>
+    </div>
+
+    <button id="generateBtn">PPT 생성</button>
+  </div>
 
   <div id="results"></div>
 </div>
 
 <p class="note">
   ※ 산업안전보건법 표준 16개 항목(KOSHA 서식) MSDS를 기준으로 자동 추출한 초안입니다.
-  인쇄·배포 전 안전보건 담당자의 검토가 필요합니다. 그림문자는 최대 3개까지 표시됩니다.
+  "DATA 추출"을 누르면 아래에 경고표지·관리요령 내용이 채워지니, 확인·수정한 뒤
+  "PPT 생성"을 눌러 PPT 파일로 내려받으세요. 그림문자는 최대 3개까지 표시됩니다.
 </p>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
