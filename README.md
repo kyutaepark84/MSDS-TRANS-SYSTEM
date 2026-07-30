@@ -55,7 +55,7 @@ python -m msds_ppt_generator "MSDS파일.pdf" --seq 21 --out-dir ./output
 - **그림문자 9종 중 6종은 간이 아이콘**: 템플릿에 실제로 포함돼 있던 느낌표/
   건강유해성/환경유해성 3종은 원본 이미지를 그대로 사용하지만, 인화성·산화성·
   고압가스·부식성·폭발성·급성독성(해골) 6종은 간단히 그려 넣은 대체
-  아이콘입니다(`msds_ppt_generator/assets/pictograms/ghs0{1,2,3,4,5,6}_*.gif`).
+  아이콘입니다(`msds_ppt_generator/assets/pictograms/ghs0{1,2,3,4,5,6}_*.PNG`).
   실제 인쇄물에는 회사 표준 GHS 아이콘으로 교체하는 것을 권장합니다.
 - **그림문자 우선순위 생략 규칙 미적용**: GHS 라벨 표시 기준에는 동일 유해성
   내에서 더 심각한 그림문자가 있으면 약한 그림문자를 생략하는 규칙이 있으나,
@@ -77,5 +77,5 @@ msds_ppt_generator/
   ppt_builder.py        템플릿에 데이터 채워 PPTX 생성
   cli.py / __main__.py  커맨드라인 진입점
   templates/            고정 PPT 템플릿 2종(현장경고표지, 관리요령)
-  assets/pictograms/    GHS 그림문자 9종 GIF
+  assets/pictograms/    GHS 그림문자 9종 PNG
 ```
