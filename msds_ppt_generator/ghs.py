@@ -12,15 +12,15 @@ PICTOGRAM_DIR_NAME = "assets/pictograms"
 
 # 그림문자 코드 -> (한글명, 자산 파일명)
 PICTOGRAMS = {
-    "GHS01": ("폭발성물질", "ghs01_explosive.png"),
-    "GHS02": ("인화성물질", "ghs02_flame.png"),
-    "GHS03": ("산화성물질", "ghs03_oxidizer.png"),
-    "GHS04": ("고압가스", "ghs04_gas_cylinder.png"),
-    "GHS05": ("부식성물질", "ghs05_corrosion.png"),
-    "GHS06": ("급성독성물질", "ghs06_toxic.png"),
-    "GHS07": ("느낌표(경고표시)", "ghs07_exclamation.png"),
-    "GHS08": ("건강유해성", "ghs08_health.png"),
-    "GHS09": ("환경유해성", "ghs09_environment.png"),
+    "GHS01": ("폭발성물질", "ghs01_explosive.gif"),
+    "GHS02": ("인화성물질", "ghs02_flame.gif"),
+    "GHS03": ("산화성물질", "ghs03_oxidizer.gif"),
+    "GHS04": ("고압가스", "ghs04_gas_cylinder.gif"),
+    "GHS05": ("부식성물질", "ghs05_corrosion.gif"),
+    "GHS06": ("급성독성물질", "ghs06_toxic.gif"),
+    "GHS07": ("느낌표(경고표시)", "ghs07_exclamation.gif"),
+    "GHS08": ("건강유해성", "ghs08_health.gif"),
+    "GHS09": ("환경유해성", "ghs09_environment.gif"),
 }
 
 # 그림문자 표시 우선순위(GHS01 -> GHS09 순으로 왼쪽부터 배치)
