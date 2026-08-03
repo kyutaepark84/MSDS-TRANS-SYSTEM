@@ -126,12 +126,44 @@ function setTextareaLines(id, lines) {
   document.getElementById(id).value = (lines || []).join("\n");
 }
 
+// 그림문자 미리보기: 경고표지/관리요령 둘 다 같은 유해성 코드에서 계산되므로
+// (computeLabelPreview/computeHandlingPreview 모두 pictogramsForHcodes(msds.
+// hazardStatements) 결과를 그대로 씀) 화면에는 공통으로 한 번만 보여준다.
+function renderPictogramPreview(codes) {
+  const container = document.getElementById("pictogramPreview");
+  if (!container) return;
+  container.innerHTML = "";
+  if (!codes || !codes.length) {
+    const empty = document.createElement("span");
+    empty.className = "pictogram-preview-empty";
+    empty.textContent = "인식된 그림문자가 없습니다.";
+    container.appendChild(empty);
+    return;
+  }
+  for (const code of codes) {
+    const item = document.createElement("div");
+    item.className = "pictogram-preview-item";
+
+    const img = document.createElement("img");
+    img.src = `data:image/png;base64,${MSDS_ASSETS.pictograms[code]}`;
+    img.alt = GHS_PICTOGRAM_NAMES[code] || code;
+
+    const caption = document.createElement("span");
+    caption.textContent = GHS_PICTOGRAM_NAMES[code] || code;
+
+    item.appendChild(img);
+    item.appendChild(caption);
+    container.appendChild(item);
+  }
+}
+
 function resetExtraction() {
   extractedMsds = null;
   labelPictogramCodes = [];
   handlingPictogramCodes = [];
   document.getElementById("editSection").hidden = true;
   document.getElementById("results").innerHTML = "";
+  renderPictogramPreview([]);
 }
 
 function fillEditForm(msds) {
@@ -139,6 +171,7 @@ function fillEditForm(msds) {
   const handlingPreview = computeHandlingPreview(msds);
   labelPictogramCodes = labelPreview.pictogramCodes;
   handlingPictogramCodes = handlingPreview.pictogramCodes;
+  renderPictogramPreview(labelPictogramCodes);
 
   document.getElementById("editProductName").value = msds.productName || "";
 
