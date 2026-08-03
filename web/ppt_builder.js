@@ -1,15 +1,15 @@
 // MSDSData -> 현장경고표지/관리요령 PPTX 생성 (브라우저용, JSZip + DOMParser 사용).
 // msds_ppt_generator/ppt_builder.py 의 JS 포팅본.
 //
-// 그림문자 처리는 Python CLI판과 달리, 템플릿에 원래 있던 그림문자 슬롯 3개의
-// 이미지 바이트만 교체하는 방식으로 단순화했다(필요 개수가 3개보다 적으면 남는
-// 슬롯의 그림을 지운다). 그래서 관계(rels)/콘텐츠 타입 XML은 건드릴 필요가 없다.
-// 대신 한 제품에 그림문자가 4개 이상 필요한 경우, 웹 버전은 우선순위
-// (GHS01→GHS09) 상위 3개까지만 표시한다 — Python CLI는 6개까지 동적으로 배치.
+// 그림문자 처리: 템플릿에 원래 있던 그림문자 슬롯(3개)은 이미지 바이트만
+// 교체해 재사용하고, 그보다 많은 그림문자가 필요하면 슬롯 하나를 복제해
+// 새 관계(rels)와 미디어 파트를 추가한 뒤 슬라이드에 삽입한다(Python CLI판과
+// 동일하게 최대 6개, 우선순위 GHS01→GHS09 상위 순).
 
 const NS = {
   a: "http://schemas.openxmlformats.org/drawingml/2006/main",
   p: "http://schemas.openxmlformats.org/presentationml/2006/main",
+  r: "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
   xml: "http://www.w3.org/XML/1998/namespace",
 };
 
@@ -21,7 +21,7 @@ const MAX_STORAGE_ITEMS = 3;
 const MAX_DISPOSAL_ITEMS = 3;
 const MAX_HANDLING_BULLETS = 4;
 const MAX_HAZARD_BULLETS = 8;
-const MAX_PICTOGRAMS_WEB = 3;
+const MAX_PICTOGRAMS_WEB = 6;
 const PRECAUTION_MAX_FONT_PT = 13;
 const PRECAUTION_MIN_FONT_PT = 9;
 const PRECAUTION_LINE_HEIGHT_FACTOR = 1.2;
@@ -29,6 +29,9 @@ const PRECAUTION_LINE_HEIGHT_FACTOR = 1.2;
 // 실제 높이가 이보다 조금 더 커서 맨 아래 행 일부가 인쇄 가능 영역을
 // 벗어나 있어, 표를 위로 살짝 올려 보정하는 데 사용한다.
 const HANDLING_SLIDE_HEIGHT_EMU = 9906000;
+
+const SLIDE_XML_PATH = "ppt/slides/slide1.xml";
+const SLIDE_RELS_PATH = "ppt/slides/_rels/slide1.xml.rels";
 
 const LABEL_PICTURE_SLOTS = [
   { name: "Picture 9", mediaPath: "ppt/media/image3.png" },
@@ -57,7 +60,7 @@ async function loadTemplateZip(base64) {
 }
 
 async function getSlideDoc(zip) {
-  const xmlText = await zip.file("ppt/slides/slide1.xml").async("string");
+  const xmlText = await zip.file(SLIDE_XML_PATH).async("string");
   return new DOMParser().parseFromString(xmlText, "application/xml");
 }
 
@@ -202,28 +205,95 @@ function repositionPictureShape(pic, x, y, size) {
   ext.setAttribute("cy", String(Math.round(size)));
 }
 
-// 표 칸(cell) 안에 그림문자를 가로 중앙 정렬로 배치하고, 칸 높이를 기준으로
-// 테두리를 넘지 않는 한도 내에서 최대한 크게 키운다(msds_ppt_generator/ppt_builder.py
-// 의 _place_pictogram_row_in_cell 과 동일한 로직).
-function applyPictogramSlotsCentered(doc, zip, slots, codes, cellLeft, cellTop, cellWidth, cellHeight, gap = 150000, padRatio = 0.08) {
+// 표 셀(a:tc)의 tcPr에 지정된 실제 여백(marL/marR/marT/marB)을 읽는다. 지정이
+// 없으면 OOXML 표 셀 기본 여백(좌우 91440 / 상하 45720 EMU)을 쓴다. 그림문자
+// 크기를 셀 "높이" 기준으로만 계산하고 이 여백을 무시하면, 셀 테두리 안쪽
+// 여백만큼 그림문자가 테두리 밖으로 살짝 넘치는 경우가 생긴다(관리요령 표의
+// 그림문자 행이 실제로 이 문제가 있었음: 여백 비율 9.3% > 기존 padRatio 8%).
+function cellInsets(tcEl) {
+  const tcPr = tcEl ? firstEl(tcEl, NS.a, "tcPr") : null;
+  return {
+    marL: parseInt((tcPr && tcPr.getAttribute("marL")) || "91440", 10),
+    marR: parseInt((tcPr && tcPr.getAttribute("marR")) || "91440", 10),
+    marT: parseInt((tcPr && tcPr.getAttribute("marT")) || "45720", 10),
+    marB: parseInt((tcPr && tcPr.getAttribute("marB")) || "45720", 10),
+  };
+}
+
+// 슬라이드에 새 이미지 관계(rels)와 미디어 파트를 추가하고 새 rId를 반환한다.
+// 그림문자 슬롯이 템플릿에 있는 개수(3개)보다 많이 필요할 때 사용한다.
+async function addPictureRelationship(zip, bytes) {
+  const usedImageNums = Object.keys(zip.files)
+    .map((name) => name.match(/^ppt\/media\/image(\d+)\.png$/))
+    .filter(Boolean)
+    .map((m) => parseInt(m[1], 10));
+  const nextImageNum = (usedImageNums.length ? Math.max(...usedImageNums) : 0) + 1;
+  const mediaPath = `ppt/media/image${nextImageNum}.png`;
+
+  let relsText = await zip.file(SLIDE_RELS_PATH).async("string");
+  const usedRelIds = Array.from(relsText.matchAll(/Id="rId(\d+)"/g)).map((m) => parseInt(m[1], 10));
+  const rId = `rId${(usedRelIds.length ? Math.max(...usedRelIds) : 0) + 1}`;
+
+  zip.file(mediaPath, bytes);
+  const newRel = `<Relationship Id="${rId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image${nextImageNum}.png"/>`;
+  relsText = relsText.replace("</Relationships>", `${newRel}</Relationships>`);
+  zip.file(SLIDE_RELS_PATH, relsText);
+
+  return rId;
+}
+
+// 표 칸(cell) 안에 그림문자를 가로 중앙 정렬로 배치하고, 칸의 실제 여백을 뺀
+// 안쪽 영역을 기준으로 테두리를 넘지 않는 한도 내에서 최대한 크게 키운다
+// (msds_ppt_generator/ppt_builder.py 의 _place_pictogram_row_in_cell 과 동일한
+// 로직 + 셀 여백 반영). 템플릿에 준비된 그림문자 슬롯(slots)보다 많은 개수가
+// 필요하면, 첫 슬롯의 도형을 복제해 새 관계/미디어와 함께 슬라이드에 추가한다.
+async function applyPictogramSlotsCentered(doc, zip, slots, codes, cellLeft, cellTop, cellWidth, cellHeight, options = {}) {
+  const { gap = 150000, padRatio = 0.02, cellEl = null } = options;
   const capped = codes.slice(0, MAX_PICTOGRAMS_WEB);
   const n = capped.length;
-  const maxByHeight = cellHeight * (1 - padRatio);
-  const maxByWidth = n > 0 ? (cellWidth - (n - 1) * gap) / n : 0;
+
+  const { marL, marR, marT, marB } = cellInsets(cellEl);
+  const innerLeft = cellLeft + marL;
+  const innerTop = cellTop + marT;
+  const innerWidth = cellWidth - marL - marR;
+  const innerHeight = cellHeight - marT - marB;
+
+  const maxByHeight = innerHeight * (1 - padRatio);
+  const maxByWidth = n > 0 ? (innerWidth - (n - 1) * gap) / n : 0;
   const size = n > 0 ? Math.max(1, Math.min(maxByHeight, maxByWidth)) : 0;
   const total = n * size + (n - 1) * gap;
-  const startX = cellLeft + (cellWidth - total) / 2;
-  const y = cellTop + (cellHeight - size) / 2;
+  const startX = innerLeft + (innerWidth - total) / 2;
+  const y = innerTop + (innerHeight - size) / 2;
+
+  const firstSlotPic = findPictureByName(doc, slots[0].name);
+  const templatePic = firstSlotPic ? firstSlotPic.cloneNode(true) : null;
+  const spTree = firstSlotPic ? firstSlotPic.parentNode : null;
+  let nextShapeId = Math.max(0, ...allEls(doc, NS.p, "cNvPr").map((el) => parseInt(el.getAttribute("id") || "0", 10)));
+
   for (let i = 0; i < slots.length; i++) {
+    const pic = findPictureByName(doc, slots[i].name);
     if (i < n) {
       const bytes = base64ToUint8Array(MSDS_ASSETS.pictograms[capped[i]]);
       zip.file(slots[i].mediaPath, bytes);
-      const pic = findPictureByName(doc, slots[i].name);
       if (pic) repositionPictureShape(pic, startX + i * (size + gap), y, size);
-    } else {
-      const pic = findPictureByName(doc, slots[i].name);
-      if (pic && pic.parentNode) pic.parentNode.removeChild(pic);
+    } else if (pic && pic.parentNode) {
+      pic.parentNode.removeChild(pic);
     }
+  }
+
+  for (let i = slots.length; i < n; i++) {
+    if (!templatePic || !spTree) break; // 템플릿에 그림 슬롯이 하나도 없으면 추가 불가
+    const bytes = base64ToUint8Array(MSDS_ASSETS.pictograms[capped[i]]);
+    const rId = await addPictureRelationship(zip, bytes);
+    const newPic = templatePic.cloneNode(true);
+    nextShapeId += 1;
+    const cNvPr = firstEl(newPic, NS.p, "cNvPr");
+    cNvPr.setAttribute("id", String(nextShapeId));
+    cNvPr.setAttribute("name", `GHS Pictogram ${i + 1}`);
+    const blip = firstEl(newPic, NS.a, "blip");
+    blip.setAttributeNS(NS.r, "r:embed", rId);
+    repositionPictureShape(newPic, startX + i * (size + gap), y, size);
+    spTree.appendChild(newPic);
   }
 }
 
@@ -411,9 +481,11 @@ async function buildLabelSlide(msds, overrides = null) {
   const row0Height = parseInt(rows[0].getAttribute("h"), 10);
   const picCellLeft = tableLeft + col0Width;
   const codes = (overrides && overrides.pictogramCodes) || pictogramsForHcodes(msds.hazardStatements.map(([c]) => c));
-  applyPictogramSlotsCentered(doc, zip, LABEL_PICTURE_SLOTS, codes, picCellLeft, tableTop, col1Width, row0Height);
+  await applyPictogramSlotsCentered(doc, zip, LABEL_PICTURE_SLOTS, codes, picCellLeft, tableTop, col1Width, row0Height, {
+    cellEl: cellsOf(0)[1],
+  });
 
-  zip.file("ppt/slides/slide1.xml", serializeDoc(doc));
+  zip.file(SLIDE_XML_PATH, serializeDoc(doc));
   return zip.generateAsync({ type: "blob", mimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation" });
 }
 
@@ -607,8 +679,10 @@ async function buildHandlingSlide(msds, overrides = null) {
   const picCellTop = tableTop + row0Height;
 
   const codes = (overrides && overrides.pictogramCodes) || pictogramsForHcodes(msds.hazardStatements.map(([c]) => c));
-  applyPictogramSlotsCentered(doc, zip, HANDLING_PICTURE_SLOTS, codes, tableLeft, picCellTop, tableWidth, row1Height);
+  await applyPictogramSlotsCentered(doc, zip, HANDLING_PICTURE_SLOTS, codes, tableLeft, picCellTop, tableWidth, row1Height, {
+    cellEl: cellsOf(1)[0],
+  });
 
-  zip.file("ppt/slides/slide1.xml", serializeDoc(doc));
+  zip.file(SLIDE_XML_PATH, serializeDoc(doc));
   return zip.generateAsync({ type: "blob", mimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation" });
 }
