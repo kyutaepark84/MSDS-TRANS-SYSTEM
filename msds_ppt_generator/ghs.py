@@ -29,8 +29,8 @@ PICTOGRAM_ORDER = list(PICTOGRAMS.keys())
 
 @dataclass(frozen=True)
 class HCodeInfo:
-    pictogram: str        # PICTOGRAMS 키
-    family: str           # 유해성・위험성 분류 항목명(MSDS 2-가 항목과 매칭용)
+    pictogram: str | None  # PICTOGRAMS 키. 자체 그림문자가 없는 H-code(예: H229)는 None
+    family: str            # 유해성・위험성 분류 항목명(MSDS 2-가 항목과 매칭용)
 
 
 # H-code -> (그림문자, 분류항목명). 분류항목명은 MSDS 2.가 "유해성・위험성 분류" 목록에서
@@ -51,7 +51,12 @@ H_CODE_TABLE = {
     "H225": HCodeInfo("GHS02", "인화성 액체"),
     "H226": HCodeInfo("GHS02", "인화성 액체"),
     "H228": HCodeInfo("GHS02", "인화성 고체"),
-    "H229": HCodeInfo("GHS04", "에어로졸"),
+    # H229는 "에어로졸" 유해성 자체가 아니라 가압 용기 경고 문구로, 인화성
+    # 에어로졸(H222/H223)에 딸려 나오는 보조 문구다. 그림문자는 GHS04(고압가스)가
+    # 아니라 H222/H223이 이미 부여하는 GHS02(인화성)를 그대로 쓰거나(1·2등급),
+    # 비인화성 에어로졸(3등급)은 그림문자가 아예 없다 - H229 자체는 그림문자를
+    # 추가하지 않는다.
+    "H229": HCodeInfo(None, "에어로졸"),
     "H230": HCodeInfo("GHS01", "자기반응성 물질"),
     "H231": HCodeInfo("GHS01", "자기반응성 물질"),
     "H240": HCodeInfo("GHS01", "자기반응성 물질"),
@@ -120,7 +125,7 @@ def pictograms_for_hcodes(hcodes):
     for raw in hcodes:
         for code in _split_combined_code(raw):
             info = H_CODE_TABLE.get(code)
-            if info:
+            if info and info.pictogram:
                 needed.add(info.pictogram)
     return [p for p in PICTOGRAM_ORDER if p in needed]
 

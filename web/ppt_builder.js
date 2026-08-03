@@ -248,7 +248,7 @@ async function addPictureRelationship(zip, bytes) {
 // 로직 + 셀 여백 반영). 템플릿에 준비된 그림문자 슬롯(slots)보다 많은 개수가
 // 필요하면, 첫 슬롯의 도형을 복제해 새 관계/미디어와 함께 슬라이드에 추가한다.
 async function applyPictogramSlotsCentered(doc, zip, slots, codes, cellLeft, cellTop, cellWidth, cellHeight, options = {}) {
-  const { gap = 150000, padRatio = 0.02, cellEl = null } = options;
+  const { gap = 150000, padRatio = 0.1, cellEl = null } = options;
   const capped = codes.slice(0, MAX_PICTOGRAMS_WEB);
   const n = capped.length;
 
