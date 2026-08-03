@@ -33,7 +33,12 @@ const H_CODE_TABLE = {
   H225: { pictogram: "GHS02", family: "인화성 액체" },
   H226: { pictogram: "GHS02", family: "인화성 액체" },
   H228: { pictogram: "GHS02", family: "인화성 고체" },
-  H229: { pictogram: "GHS04", family: "에어로졸" },
+  // H229는 "에어로졸" 유해성 자체가 아니라 가압 용기 경고 문구로, 인화성
+  // 에어로졸(H222/H223)에 딸려 나오는 보조 문구다. 그림문자는 GHS04(고압가스)가
+  // 아니라 H222/H223이 이미 부여하는 GHS02(인화성)를 그대로 쓰거나(1·2등급),
+  // 비인화성 에어로졸(3등급)은 그림문자가 아예 없다 - H229 자체는 그림문자를
+  // 추가하지 않는다.
+  H229: { pictogram: null, family: "에어로졸" },
   H230: { pictogram: "GHS01", family: "자기반응성 물질" },
   H231: { pictogram: "GHS01", family: "자기반응성 물질" },
   H240: { pictogram: "GHS01", family: "자기반응성 물질" },
@@ -100,7 +105,7 @@ function pictogramsForHcodes(hcodes) {
   for (const raw of hcodes) {
     for (const code of splitCombinedCode(raw)) {
       const info = H_CODE_TABLE[code];
-      if (info) needed.add(info.pictogram);
+      if (info && info.pictogram) needed.add(info.pictogram);
     }
   }
   return GHS_PICTOGRAM_ORDER.filter((p) => needed.has(p));
