@@ -39,10 +39,17 @@ const H_CODE_TABLE = {
   // 비인화성 에어로졸(3등급)은 그림문자가 아예 없다 - H229 자체는 그림문자를
   // 추가하지 않는다.
   H229: { pictogram: null, family: "에어로졸" },
-  H230: { pictogram: "GHS01", family: "자기반응성 물질" },
-  H231: { pictogram: "GHS01", family: "자기반응성 물질" },
+  // H230/H231("공기가 없어도 폭발적으로 반응할 수 있음")은 자기반응성
+  // 물질이 아니라 "화학적으로 불안정한 가스"(인화성 가스 구분1A에 딸린
+  // 보조 분류)다. 그림문자는 이미 H220/H221이 부여하는 GHS02(인화성)로
+  // 충분해, H230/H231 자체는 추가 그림문자가 없다(H229와 동일한 패턴).
+  H230: { pictogram: null, family: "화학적으로 불안정한 가스" },
+  H231: { pictogram: null, family: "화학적으로 불안정한 가스" },
   H240: { pictogram: "GHS01", family: "자기반응성 물질" },
-  H241: { pictogram: "GHS02", family: "자기반응성 물질" },
+  // H241(자기반응성/유기과산화물 유형B, "가열하면 화재 또는 폭발할 수
+  // 있음")은 GHS상 GHS01(폭발성)과 GHS02(인화성) 그림문자를 함께 표시해야
+  // 한다(유형A인 H240은 GHS01만, 유형C~F인 H242는 GHS02만).
+  H241: { pictogram: "GHS01", extraPictogram: "GHS02", family: "자기반응성 물질" },
   H242: { pictogram: "GHS02", family: "자기반응성 물질" },
   H250: { pictogram: "GHS02", family: "자연발화성 물질" },
   H251: { pictogram: "GHS02", family: "자기발열성 물질" },
@@ -87,7 +94,10 @@ const H_CODE_TABLE = {
   H351: { pictogram: "GHS08", family: "발암성" },
   H360: { pictogram: "GHS08", family: "생식독성" },
   H361: { pictogram: "GHS08", family: "생식독성" },
-  H362: { pictogram: "GHS08", family: "생식독성(수유독성)" },
+  // H362("수유 중인 자녀에게 유해할 수 있음")는 생식독성의 정식 구분이
+  // 아니라 수유 영향에 대한 추가 정보로, GHS상 그림문자·신호어가 필요
+  // 없다(생식독성 구분1/2는 H360/H361이 이미 GHS08을 부여함).
+  H362: { pictogram: null, family: "생식독성(수유독성)" },
   H370: { pictogram: "GHS08", family: "특정표적장기독성(1회 노출)" },
   H371: { pictogram: "GHS08", family: "특정표적장기독성(1회 노출)" },
   H372: { pictogram: "GHS08", family: "특정표적장기독성(반복 노출)" },
@@ -119,9 +129,14 @@ function pictogramsForHcodes(hcodes) {
   const contributors = {}; // 그림문자 -> 이를 요구한 H-code 집합
   for (const code of flatCodes) {
     const info = H_CODE_TABLE[code];
-    if (info && info.pictogram) {
+    if (!info) continue;
+    if (info.pictogram) {
       if (!contributors[info.pictogram]) contributors[info.pictogram] = new Set();
       contributors[info.pictogram].add(code);
+    }
+    if (info.extraPictogram) {
+      if (!contributors[info.extraPictogram]) contributors[info.extraPictogram] = new Set();
+      contributors[info.extraPictogram].add(code);
     }
   }
 

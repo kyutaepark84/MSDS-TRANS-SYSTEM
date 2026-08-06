@@ -29,8 +29,9 @@ PICTOGRAM_ORDER = list(PICTOGRAMS.keys())
 
 @dataclass(frozen=True)
 class HCodeInfo:
-    pictogram: str | None  # PICTOGRAMS 키. 자체 그림문자가 없는 H-code(예: H229)는 None
-    family: str            # 유해성・위험성 분류 항목명(MSDS 2-가 항목과 매칭용)
+    pictogram: str | None       # PICTOGRAMS 키. 자체 그림문자가 없는 H-code(예: H229)는 None
+    family: str                 # 유해성・위험성 분류 항목명(MSDS 2-가 항목과 매칭용)
+    extra_pictogram: str | None = None  # 그림문자가 2개 필요한 예외(예: H241)의 두 번째 그림문자
 
 
 # H-code -> (그림문자, 분류항목명). 분류항목명은 MSDS 2.가 "유해성・위험성 분류" 목록에서
@@ -57,10 +58,17 @@ H_CODE_TABLE = {
     # 비인화성 에어로졸(3등급)은 그림문자가 아예 없다 - H229 자체는 그림문자를
     # 추가하지 않는다.
     "H229": HCodeInfo(None, "에어로졸"),
-    "H230": HCodeInfo("GHS01", "자기반응성 물질"),
-    "H231": HCodeInfo("GHS01", "자기반응성 물질"),
+    # H230/H231("공기가 없어도 폭발적으로 반응할 수 있음")은 자기반응성
+    # 물질이 아니라 "화학적으로 불안정한 가스"(인화성 가스 구분1A에 딸린
+    # 보조 분류)다. 그림문자는 이미 H220/H221이 부여하는 GHS02(인화성)로
+    # 충분해, H230/H231 자체는 추가 그림문자가 없다(H229와 동일한 패턴).
+    "H230": HCodeInfo(None, "화학적으로 불안정한 가스"),
+    "H231": HCodeInfo(None, "화학적으로 불안정한 가스"),
     "H240": HCodeInfo("GHS01", "자기반응성 물질"),
-    "H241": HCodeInfo("GHS02", "자기반응성 물질"),
+    # H241(자기반응성/유기과산화물 유형B, "가열하면 화재 또는 폭발할 수
+    # 있음")은 GHS상 GHS01(폭발성)과 GHS02(인화성) 그림문자를 함께 표시해야
+    # 한다(유형A인 H240은 GHS01만, 유형C~F인 H242는 GHS02만).
+    "H241": HCodeInfo("GHS01", "자기반응성 물질", extra_pictogram="GHS02"),
     "H242": HCodeInfo("GHS02", "자기반응성 물질"),
     "H250": HCodeInfo("GHS02", "자연발화성 물질"),
     "H251": HCodeInfo("GHS02", "자기발열성 물질"),
@@ -106,7 +114,10 @@ H_CODE_TABLE = {
     "H351": HCodeInfo("GHS08", "발암성"),
     "H360": HCodeInfo("GHS08", "생식독성"),
     "H361": HCodeInfo("GHS08", "생식독성"),
-    "H362": HCodeInfo("GHS08", "생식독성(수유독성)"),
+    # H362("수유 중인 자녀에게 유해할 수 있음")는 생식독성의 정식 구분이
+    # 아니라 수유 영향에 대한 추가 정보로, GHS상 그림문자·신호어가 필요
+    # 없다(생식독성 구분1/2는 H360/H361이 이미 GHS08을 부여함).
+    "H362": HCodeInfo(None, "생식독성(수유독성)"),
     "H370": HCodeInfo("GHS08", "특정표적장기독성(1회 노출)"),
     "H371": HCodeInfo("GHS08", "특정표적장기독성(1회 노출)"),
     "H372": HCodeInfo("GHS08", "특정표적장기독성(반복 노출)"),
@@ -139,8 +150,12 @@ def pictograms_for_hcodes(hcodes):
     contributors = {}  # 그림문자 -> 이를 요구한 H-code 집합
     for code in flat_codes:
         info = H_CODE_TABLE.get(code)
-        if info and info.pictogram:
+        if not info:
+            continue
+        if info.pictogram:
             contributors.setdefault(info.pictogram, set()).add(code)
+        if info.extra_pictogram:
+            contributors.setdefault(info.extra_pictogram, set()).add(code)
 
     has_stronger = (
         any(p in contributors for p in _GHS07_OMISSION_TRIGGER_PICTOGRAMS)
