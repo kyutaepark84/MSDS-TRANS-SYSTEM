@@ -17,6 +17,21 @@ const GHS_PICTOGRAM_NAMES = {
   GHS09: "환경유해성",
 };
 
+// 그림문자가 실제로 어떤 유해성 항목들을 의미하는지 풀어 쓴 설명(웹 화면
+// 그림문자 미리보기의 마우스오버 툴팁용). 사용자가 확인용으로 참고하는
+// 공식 GHS 그림문자 안내표의 문구를 그대로 따른다.
+const GHS_PICTOGRAM_DESCRIPTIONS = {
+  GHS01: "폭발성 / 자기반응성, 유기과산화물",
+  GHS02: "인화성 / 자연발화성, 물반응성 / 자기반응성, 유기과산화물",
+  GHS03: "산화성",
+  GHS04: "고압가스",
+  GHS05: "금속부식성, 피부부식성, 심한 눈 손상성",
+  GHS06: "급성독성(구분 1~3)",
+  GHS07: "급성독성(구분 4), 심한 눈/피부 자극성, 피부과민성",
+  GHS08: "발암성 / 생식독성, 생식세포변이원성, 호흡기과민성, 표적장기독성",
+  GHS09: "수생환경유해성",
+};
+
 // H-code -> { pictogram, family }
 const H_CODE_TABLE = {
   H200: { pictogram: "GHS01", family: "불안정 폭발성 물질" },
@@ -105,8 +120,10 @@ const H_CODE_TABLE = {
   H400: { pictogram: "GHS09", family: "급성 수생환경 유해성" },
   H410: { pictogram: "GHS09", family: "만성 수생환경 유해성" },
   H411: { pictogram: "GHS09", family: "만성 수생환경 유해성" },
-  H412: { pictogram: "GHS09", family: "만성 수생환경 유해성" },
-  H413: { pictogram: "GHS09", family: "만성 수생환경 유해성" },
+  // H412/H413(만성 수생환경유해성 구분3/4)은 GHS상 그림문자·신호어가 필요
+  // 없는 가장 약한 등급이다(구분1/2인 H410/H411까지만 GHS09가 필요함).
+  H412: { pictogram: null, family: "만성 수생환경 유해성" },
+  H413: { pictogram: null, family: "만성 수생환경 유해성" },
 };
 
 function splitCombinedCode(raw) {

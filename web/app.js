@@ -159,6 +159,9 @@ function renderPictogramPreview(codes) {
   for (const code of codes) {
     const item = document.createElement("div");
     item.className = "pictogram-preview-item";
+    // 어떤 유해성 항목 때문에 이 그림문자가 붙었는지 마우스오버로 바로
+    // 확인할 수 있도록, 공식 GHS 안내표 문구를 툴팁(title)으로 붙인다.
+    item.title = GHS_PICTOGRAM_DESCRIPTIONS[code] || "";
 
     const img = document.createElement("img");
     img.src = `data:image/png;base64,${MSDS_ASSETS.pictograms[code]}`;
