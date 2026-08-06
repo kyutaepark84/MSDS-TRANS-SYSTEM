@@ -208,7 +208,12 @@ def extract_flat_text(pdf_path):
     revision_date = ""
     with pdfplumber.open(pdf_path) as pdf:
         for page in pdf.pages:
-            text = page.extract_text() or ""
+            # 일부 문서는 볼드체를 흉내내려고 같은 글자를 아주 미세하게(1pt
+            # 이내) 어긋난 위치에 겹쳐서 두 번 그린다(예: "1. 화학제품과..."가
+            # "11.. 화화학학제제품품과과..."로 통째로 겹쳐 나옴). 그대로 두면
+            # 항목 제목 정규식이 전혀 매치되지 않아 문서 전체가 비어버리므로,
+            # 같은 위치·글자가 겹치는 문자는 dedupe_chars로 하나만 남긴다.
+            text = page.dedupe_chars(tolerance=1).extract_text() or ""
             if not revision_date:
                 m = _REVISION_DATE_RE.search(text)
                 if m:
@@ -260,7 +265,9 @@ def split_sections(flat_text):
         # 기호(가운뎃점, 슬래시, 또는 그 자리에서 추출된 PUA 코드)가 하나
         # 더 붙어 있다(예: "2. ·유해성위험성", "8. /노출방지개인보호구").
         # 제목 매칭 자체가 막히지 않도록 그런 장식 기호 하나는 건너뛴다.
-        pat = re.compile(rf"{expected}\.\s*[·ㆍ•・∙/-]?\s*{SECTION_TITLE_PATTERNS[expected]}")
+        # 일부 문서는 항목 번호와 마침표 사이에도 공백이 끼어 있다(예:
+        # "1 . 화학제품과..."), 그래서 숫자 바로 뒤에도 \s*를 둔다.
+        pat = re.compile(rf"{expected}\s*\.\s*[·ㆍ•・∙/-]?\s*{SECTION_TITLE_PATTERNS[expected]}")
         m = pat.search(flat_text, pos)
         if not m:
             break

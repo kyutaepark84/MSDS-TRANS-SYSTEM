@@ -44,6 +44,22 @@ async function extractPagesText(arrayBuffer) {
     }
     for (const row of rows) row.items.sort((a, b) => a.x - b.x);
 
+    // 일부 문서는 볼드체를 흉내내려고 같은 글자를 아주 미세하게(1pt 이내)
+    // 어긋난 위치에 겹쳐서 두 번 그린다(예: "1. 화학제품과..."가 "1 .1 .
+    // 화 학 제 품 과화 학 제 품 과..."처럼 통째로 겹쳐 나옴). 그대로 두면
+    // 항목 제목 정규식이 전혀 매치되지 않아 문서 전체가 비어버리므로, 같은
+    // 문자열이 같은 줄에서 실제 글자 하나 폭보다 훨씬 좁은 간격으로
+    // 반복되면 겹쳐 찍힌 것으로 보고 하나만 남긴다.
+    for (const row of rows) {
+      const deduped = [];
+      for (const item of row.items) {
+        const prev = deduped[deduped.length - 1];
+        if (prev && prev.str === item.str && Math.abs(item.x - prev.x) < 2) continue;
+        deduped.push(item);
+      }
+      row.items = deduped;
+    }
+
     // PDF.js는 단어 단위가 아니라 글자/글리프 단위로 items를 쪼개 반환하는 경우가
     // 많다. 항목 사이에 무조건 공백을 넣으면 "경 상남도"처럼 단어 중간이 깨지므로,
     // 실제 가로 간격이 해당 항목 글자폭 대비 충분히 클 때만 공백으로 취급한다.
