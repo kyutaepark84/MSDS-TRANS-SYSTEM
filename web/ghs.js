@@ -58,12 +58,15 @@ const H_CODE_TABLE = {
   H300: { pictogram: "GHS06", family: "급성 독성(경구)" },
   H301: { pictogram: "GHS06", family: "급성 독성(경구)" },
   H302: { pictogram: "GHS07", family: "급성 독성(경구)" },
-  H303: { pictogram: "GHS07", family: "급성 독성(경구)" },
+  // H303/H313/H333(구분5)는 GHS상 그림문자가 아예 없는 등급이다("...할 수
+  // 있음"류 최저 등급 문구). 이전에는 구분4(H302/H312/H332)와 똑같이 GHS07로
+  // 매핑돼 있어, 구분5만 있는 문서에서도 느낌표가 잘못 표시됐다.
+  H303: { pictogram: null, family: "급성 독성(경구)" },
   H304: { pictogram: "GHS08", family: "흡인 유해성" },
   H310: { pictogram: "GHS06", family: "급성 독성(경피)" },
   H311: { pictogram: "GHS06", family: "급성 독성(경피)" },
   H312: { pictogram: "GHS07", family: "급성 독성(경피)" },
-  H313: { pictogram: "GHS07", family: "급성 독성(경피)" },
+  H313: { pictogram: null, family: "급성 독성(경피)" },
   H314: { pictogram: "GHS05", family: "피부 부식성/자극성" },
   H315: { pictogram: "GHS07", family: "피부 부식성/자극성" },
   H316: { pictogram: "GHS07", family: "피부 부식성/자극성" },
@@ -74,7 +77,7 @@ const H_CODE_TABLE = {
   H330: { pictogram: "GHS06", family: "급성 독성(흡입)" },
   H331: { pictogram: "GHS06", family: "급성 독성(흡입)" },
   H332: { pictogram: "GHS07", family: "급성 독성(흡입)" },
-  H333: { pictogram: "GHS07", family: "급성 독성(흡입)" },
+  H333: { pictogram: null, family: "급성 독성(흡입)" }, // 구분5, 그림문자 없음
   H334: { pictogram: "GHS08", family: "호흡기과민성" },
   H335: { pictogram: "GHS07", family: "특정표적장기독성(1회 노출)" },
   H336: { pictogram: "GHS07", family: "특정표적장기독성(1회 노출)" },
@@ -100,14 +103,37 @@ function splitCombinedCode(raw) {
   return raw.replace(/\s+/g, "").split("+").filter(Boolean);
 }
 
+// GHS 그림문자 우선순위 규칙(그림문자 병용 원칙): 부식성(GHS05)·급성독성
+// (GHS06) 그림문자나 호흡기과민성(H334, GHS08)이 이미 쓰이면, 그보다 약한
+// 피부/눈 자극성·특정표적장기독성(1회노출) 자극/마취영향에 대한 느낌표
+// (GHS07)는 표시하지 않는다. 다른 사유(예: 피부과민성 H317, 급성독성
+// 구분4)로도 GHS07이 필요하면 그건 생략되지 않는다.
+const GHS07_OMITTED_WHEN_STRONGER_PRESENT = new Set(["H315", "H316", "H319", "H320", "H335", "H336"]);
+const GHS07_OMISSION_TRIGGER_PICTOGRAMS = ["GHS05", "GHS06"];
+const GHS07_OMISSION_TRIGGER_CODES = new Set(["H334"]);
+
 function pictogramsForHcodes(hcodes) {
-  const needed = new Set();
-  for (const raw of hcodes) {
-    for (const code of splitCombinedCode(raw)) {
-      const info = H_CODE_TABLE[code];
-      if (info && info.pictogram) needed.add(info.pictogram);
+  const flatCodes = [];
+  for (const raw of hcodes) flatCodes.push(...splitCombinedCode(raw));
+
+  const contributors = {}; // 그림문자 -> 이를 요구한 H-code 집합
+  for (const code of flatCodes) {
+    const info = H_CODE_TABLE[code];
+    if (info && info.pictogram) {
+      if (!contributors[info.pictogram]) contributors[info.pictogram] = new Set();
+      contributors[info.pictogram].add(code);
     }
   }
+
+  const hasStronger =
+    GHS07_OMISSION_TRIGGER_PICTOGRAMS.some((p) => contributors[p]) ||
+    flatCodes.some((c) => GHS07_OMISSION_TRIGGER_CODES.has(c));
+  if (hasStronger && contributors.GHS07) {
+    for (const c of GHS07_OMITTED_WHEN_STRONGER_PRESENT) contributors.GHS07.delete(c);
+    if (contributors.GHS07.size === 0) delete contributors.GHS07;
+  }
+
+  const needed = new Set(Object.keys(contributors));
   return GHS_PICTOGRAM_ORDER.filter((p) => needed.has(p));
 }
 
