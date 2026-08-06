@@ -181,7 +181,33 @@ function extractFlatText(pages) {
   return { flat, revisionDate };
 }
 
+function isHangulChar(ch) {
+  return ch >= "가" && ch <= "힣";
+}
+
+// 일부 문서는 제목(볼드)에만 글자 사이마다 낱칸 공백을 끼워 넣는다(예:
+// "화 학 제 품 과 회 사 에 관 한 정 보"). SECTION_TITLE_PATTERNS는 단어 내부
+// 글자 사이에는 \s*를 두지 않으므로 이 상태로는 전혀 매치되지 않고, 그러면
+// splitSections이 첫 항목에서부터 멈춰 문서 전체가 빈 값이 된다. 원본 내용은
+// 그대로 두되(문장 안 정상적인 단어 간격까지 지우면 안 되므로), 제목 위치를
+// "찾을 때"만 한글-공백-한글 패턴을 붙여본 버전으로 검색하고, 찾은 위치를
+// 원본 문자열 인덱스로 다시 환산한다.
+function collapseHangulSpacing(text) {
+  let collapsed = "";
+  const indexMap = [];
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === " " && isHangulChar(text[i - 1] || "") && isHangulChar(text[i + 1] || "")) {
+      continue;
+    }
+    collapsed += ch;
+    indexMap.push(i);
+  }
+  return { collapsed, indexMap };
+}
+
 function splitSections(flatText) {
+  const { collapsed, indexMap } = collapseHangulSpacing(flatText);
   const boundaries = [];
   let expected = 1;
   let pos = 0;
@@ -190,11 +216,14 @@ function splitSections(flatText) {
     // 기호(가운뎃점, 슬래시, 또는 그 자리에서 추출된 PUA 코드)가 하나 더
     // 붙어 있다(예: "2. ·유해성위험성", "8. /노출방지개인보호구"). 제목
     // 매칭 자체가 막히지 않도록 그런 장식 기호 하나는 건너뛴다.
-    const pat = new RegExp(`${expected}\\.\\s*[·ㆍ•・∙/-]?\\s*${SECTION_TITLE_PATTERNS[expected]}`);
-    const m = pat.exec(flatText.slice(pos));
+    // 일부 문서는 항목 번호와 마침표 사이에도 공백이 끼어 있다(예: "1 .
+    // 화학제품과..."), 그래서 숫자 바로 뒤에도 \s*를 둔다.
+    const pat = new RegExp(`${expected}\\s*\\.\\s*[·ㆍ•・∙/-]?\\s*${SECTION_TITLE_PATTERNS[expected]}`);
+    const m = pat.exec(collapsed.slice(pos));
     if (!m) break;
-    boundaries.push([pos + m.index, expected]);
-    pos = pos + m.index + m[0].length;
+    const matchStart = pos + m.index;
+    boundaries.push([indexMap[matchStart], expected]);
+    pos = matchStart + m[0].length;
     expected += 1;
   }
   boundaries.push([flatText.length, null]);
