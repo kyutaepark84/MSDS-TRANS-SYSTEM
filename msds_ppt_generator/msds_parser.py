@@ -46,16 +46,23 @@ SECTION_TITLES = {
 # 문자도 같은 역할의 구분자로 인정한다.
 SEP = r"[·ㆍ•・∙,-]"
 
+# SEP는 "·" 등 기호 구분자만 다루는데, "폭발 및 화재시 대처방법"처럼 기호 대신
+# 단어 "및"으로 이어붙인 문서도 있다(section8은 이미 이렇게 처리돼 있었음).
+# 이 문서(폭발·화재)를 못 찾으면 split_sections()가 그 지점에서 멈춰버려서
+# 뒤따르는 6~16번 항목이 통째로 빈 값이 되므로, SEP를 쓰는 자리는 모두
+# "및"도 허용한다.
+_SEP_OR_AND = rf"(?:{SEP}|및)?"
+
 SECTION_TITLE_PATTERNS = {
     1: r"화학제품과\s*회사에\s*관한\s*정보",
-    2: rf"유해성?\s*{SEP}?\s*위험성",
+    2: rf"유해성?\s*{_SEP_OR_AND}\s*위험성",
     3: r"구성\s*성분(?:의|과)?\s*명칭\s*및\s*함유량",  # "구성성분과 명칭..."처럼 조사가 다른 문서도 있음
     4: r"응급\s*조치\s*요령",
-    5: rf"폭발\s*{SEP}?\s*화재\s*시\s*대처\s*방법",
+    5: rf"폭발\s*{_SEP_OR_AND}\s*화재\s*시\s*대처\s*방법",
     6: r"누출\s*사고\s*시\s*대처\s*방법",
     7: r"취급\s*및\s*저장\s*(?:방법|밥법)",  # 원본에 "방법"이 "밥법"으로 오타난 문서가 있음
     8: r"노출\s*방지\s*(?:(?:및|/)\s*)?개인\s*보호구",  # "및"이 빠지거나 "/"로 대신 쓰인 문서가 있음
-    9: rf"물리\s*{SEP}?\s*화학적\s*특(?:성|징)",
+    9: rf"물리\s*{_SEP_OR_AND}\s*화학적\s*특(?:성|징)",
     10: r"안(?:정|전)성\s*및\s*반응성",  # "안전성"으로 오타난 문서가 있음(안정성이 맞음)
     11: r"독성에\s*관한\s*정보",
     12: r"환경에\s*미치는\s*영향",
@@ -90,11 +97,25 @@ STOP = (
 )
 _STOP_MATCH = rf"(?<![가-힣])[{_ORDINAL_CHARS}]\.\s|(?<![가-힣])[{_ORDINAL_CHARS}]\)|\(\d+\)|\d+\)|\d+(?:\.\d+)+\.?|-\s+\S|○\s*\S"
 
+# 페이지 머리말/꼬리말에 흔히 쓰이는 낱개 토큰들. 문서마다 이 토큰들이 나오는
+# 순서가 다른 경우가 있어(예: "문서번호"가 "(Material Safety Data Sheets)"
+# 보다 먼저 나오고 "개정일자"가 "개정번호"보다 먼저 나오는 문서), 아래 고정
+# 순서 패턴 하나만으로는 못 걸러내는 문서가 있다. _HEADER_BLOCK_RE가 순서에
+# 상관없이 이 토큰이 2개 이상 연달아 나오는 구간을 통째로 지워, 그런 경우도
+# 잡아낸다.
+_HEADER_BLOCK_TOKEN = (
+    r"(?:MSDS\s*번호\s*[:：]?\s*\S+|물\s*질\s*안\s*전\s*보\s*건\s*자\s*료|"
+    r"\(Material Safety Data Sheets\)|문서번호\s*[:：]?\s*\S+|"
+    r"개정번호\s*[:：]?\s*\S+|개정일자\s*[:：]?\s*[\d.]+)"
+)
+_HEADER_BLOCK_RE = rf"(?:{_HEADER_BLOCK_TOKEN}\s*){{2,}}"
+
 _BOILERPLATE_PATTERNS = [
     r"물\s*질\s*안\s*전\s*보\s*건\s*자\s*료\s*\(Material Safety Data Sheets\)\s*문서번호\s*\S+\s*개정번호\s*\S+\s*개정일자\s*[\d.\s]+년?월?일?",
+    _HEADER_BLOCK_RE,
     r"물질안전보건자료(?=\s|$)",
     r"페이지\s*[:：]\s*\d+\(\d+\)",
-    r"SDS\s*번호\s*[:：]\s*\S+",
+    r"M?SDS\s*번호\s*[:：]\s*\S+",
     r"최종개정일자\s*[:：]\s*[\d.]+",
     r"본\s*물질안전보건자료는\s*산업안전보건법\s*및\s*시행규칙에\s*의거하여\s*작성",
     r"\S{1,20}\s+\d+\s*페이지\s*중\s*\d+\s*페이지\s*MSDS-\S+\s*\(rev\.\d+\)",
@@ -272,8 +293,10 @@ def _capture_after_label(text, label_pattern, max_chars=150, extra_stop=None):
     rest = re.sub(r"^\s*[-○]\s*", "", rest)
     stop_pattern = _STOP_MATCH if not extra_stop else rf"{_STOP_MATCH}|{extra_stop}"
     # 첫 STOP 지점이 거의 즉시(빈 캡처 수준)라면 같은 항목의 하위번호
-    # (예: "6.2. 환경보호 6.2.1. 대기 : ...")일 가능성이 높으므로 그 마커를
-    # 건너뛰고(캡처 시작점도 함께 이동) 다음 STOP까지 계속 찾는다(최대 3회).
+    # (예: "6.2. 환경보호 6.2.1. 대기 : ...", "8. 다. 항목에 제시된...")일
+    # 가능성이 높으므로 그 마커를 건너뛰고(캡처 시작점도 함께 이동) 다음
+    # STOP까지 계속 찾는다(최대 3회). 임계값은 "8. "(3자)처럼 두 자리 미만
+    # 항목번호 뒤에 바로 딸림표가 오는 경우까지 걸러내도록 3보다 넉넉하게 잡는다.
     search_from = 0
     content_start = 0
     end = len(rest)
@@ -282,7 +305,7 @@ def _capture_after_label(text, label_pattern, max_chars=150, extra_stop=None):
         if not stop_m:
             end = len(rest)
             break
-        if stop_m.start() < 3:
+        if stop_m.start() < 6:
             search_from += stop_m.end()
             content_start = search_from
             continue
@@ -304,7 +327,9 @@ def _sentences(text, max_sentences=4, max_chars_each=90):
     높이/글자 크기를 조정해 온전히 보여준다). max_chars_each는 문장 부호가
     전혀 없는 비정상적으로 긴 덩어리(예: 줄바꿈만 있고 마침표가 없는 문서)에
     대한 안전장치로만 쓰이며, 이때도 "…"로 끊기보다 여유 있게 잡는다."""
-    parts = re.split(r"(?<=[.!?])\s+", text.strip())
+    # 항목 번호(예: "8. 다. 항목에 제시된...")처럼 숫자 바로 뒤에 오는 마침표는
+    # 문장 종결이 아니라 참조 번호이므로, 그 뒤 공백에서는 끊지 않는다.
+    parts = re.split(r"(?<=[.!?])(?<!\d[.!?])\s+", text.strip())
     parts = [p.strip() for p in parts if p.strip()]
     out = []
     safety_cap = max(max_chars_each, 400)
