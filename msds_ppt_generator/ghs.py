@@ -77,12 +77,15 @@ H_CODE_TABLE = {
     "H300": HCodeInfo("GHS06", "급성 독성(경구)"),
     "H301": HCodeInfo("GHS06", "급성 독성(경구)"),
     "H302": HCodeInfo("GHS07", "급성 독성(경구)"),
-    "H303": HCodeInfo("GHS07", "급성 독성(경구)"),
+    # H303/H313/H333(구분5)는 GHS상 그림문자가 아예 없는 등급이다("...할 수
+    # 있음"류 최저 등급 문구). 이전에는 구분4(H302/H312/H332)와 똑같이
+    # GHS07로 매핑돼 있어, 구분5만 있는 문서에서도 느낌표가 잘못 표시됐다.
+    "H303": HCodeInfo(None, "급성 독성(경구)"),
     "H304": HCodeInfo("GHS08", "흡인 유해성"),
     "H310": HCodeInfo("GHS06", "급성 독성(경피)"),
     "H311": HCodeInfo("GHS06", "급성 독성(경피)"),
     "H312": HCodeInfo("GHS07", "급성 독성(경피)"),
-    "H313": HCodeInfo("GHS07", "급성 독성(경피)"),
+    "H313": HCodeInfo(None, "급성 독성(경피)"),
     "H314": HCodeInfo("GHS05", "피부 부식성/자극성"),
     "H315": HCodeInfo("GHS07", "피부 부식성/자극성"),
     "H316": HCodeInfo("GHS07", "피부 부식성/자극성"),
@@ -93,7 +96,7 @@ H_CODE_TABLE = {
     "H330": HCodeInfo("GHS06", "급성 독성(흡입)"),
     "H331": HCodeInfo("GHS06", "급성 독성(흡입)"),
     "H332": HCodeInfo("GHS07", "급성 독성(흡입)"),
-    "H333": HCodeInfo("GHS07", "급성 독성(흡입)"),
+    "H333": HCodeInfo(None, "급성 독성(흡입)"),  # 구분5, 그림문자 없음
     "H334": HCodeInfo("GHS08", "호흡기과민성"),
     "H335": HCodeInfo("GHS07", "특정표적장기독성(1회 노출)"),
     "H336": HCodeInfo("GHS07", "특정표적장기독성(1회 노출)"),
@@ -117,16 +120,38 @@ H_CODE_TABLE = {
 }
 
 
+# GHS 그림문자 우선순위 규칙(그림문자 병용 원칙): 부식성(GHS05)·급성독성
+# (GHS06) 그림문자나 호흡기과민성(H334, GHS08)이 이미 쓰이면, 그보다 약한
+# 피부/눈 자극성·특정표적장기독성(1회노출) 자극/마취영향에 대한 느낌표
+# (GHS07)는 표시하지 않는다. 다른 사유(예: 피부과민성 H317, 급성독성
+# 구분4)로도 GHS07이 필요하면 그건 생략되지 않는다.
+_GHS07_OMITTED_WHEN_STRONGER_PRESENT = {"H315", "H316", "H319", "H320", "H335", "H336"}
+_GHS07_OMISSION_TRIGGER_PICTOGRAMS = {"GHS05", "GHS06"}
+_GHS07_OMISSION_TRIGGER_CODES = {"H334"}
+
+
 def pictograms_for_hcodes(hcodes):
     """H-code(예: 'H317', 'H305+H351') 목록에서 필요한 그림문자 코드를 중복 없이,
-    GHS01 -> GHS09 순서로 정렬해 반환한다.
+    GHS01 -> GHS09 순서로 정렬해 반환한다. 동일 유해성 안에서 더 심각한
+    그림문자가 이미 쓰이면 약한 그림문자를 생략하는 GHS 표시 규칙도 반영한다.
     """
-    needed = set()
-    for raw in hcodes:
-        for code in _split_combined_code(raw):
-            info = H_CODE_TABLE.get(code)
-            if info and info.pictogram:
-                needed.add(info.pictogram)
+    flat_codes = [c for raw in hcodes for c in _split_combined_code(raw)]
+    contributors = {}  # 그림문자 -> 이를 요구한 H-code 집합
+    for code in flat_codes:
+        info = H_CODE_TABLE.get(code)
+        if info and info.pictogram:
+            contributors.setdefault(info.pictogram, set()).add(code)
+
+    has_stronger = (
+        any(p in contributors for p in _GHS07_OMISSION_TRIGGER_PICTOGRAMS)
+        or any(c in flat_codes for c in _GHS07_OMISSION_TRIGGER_CODES)
+    )
+    if has_stronger and "GHS07" in contributors:
+        contributors["GHS07"] -= _GHS07_OMITTED_WHEN_STRONGER_PRESENT
+        if not contributors["GHS07"]:
+            del contributors["GHS07"]
+
+    needed = set(contributors.keys())
     return [p for p in PICTOGRAM_ORDER if p in needed]
 
 
